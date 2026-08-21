@@ -1,0 +1,110 @@
+name: guard
+
+# Переиспользуемый проход. Живёт в одном месте, зовётся из любого репозитория
+# организации восемью строками — см. primer/guard.yml.
+#
+# Почему так, а не копией в каждом репозитории: скопированный страж расходится
+# при первой же правке правил, и заметить это нечем. Правило поправили здесь —
+# оно действует везде со следующего пуша.
+#
+# .gitleaks.toml сюда НЕ уносим: исключения свои у каждого проекта, им место
+# рядом с кодом. Проход берёт файл из вызывающего репозитория.
+
+on:
+  workflow_call:
+    inputs:
+      gitleaks-config:
+        description: "Путь к .gitleaks.toml в вызывающем репозитории"
+        type: string
+        default: ".gitleaks.toml"
+      gitleaks-version:
+        description: "Версия gitleaks"
+        type: string
+        default: "8.21.2"
+      proveryat-js:
+        description: "Прогонять ли node --check по файлам .js"
+        type: boolean
+        default: true
+
+jobs:
+  klyuchi:
+    name: ключи и абсолютные пути
+    runs-on: ubuntu-latest
+    steps:
+      - name: Забрать вызывающий репозиторий
+        uses: actions/checkout@v4
+
+      - name: Забрать сторожа
+        uses: actions/checkout@v4
+        with:
+          repository: x10company/ci-guard
+          path: .ci-guard
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Самопроверка сторожа
+        run: |
+          # Сначала спрашиваем, видит ли он вообще. Правило легко ослепить —
+          # достаточно неудачной строки в списке исключений. Пустой результат
+          # это «ничего не проверено», а не «всё хорошо».
+          python .ci-guard/tools/check-secrets.py --samoproverka --koren .
+
+      - name: Сторож по рабочему дереву
+        run: |
+          # --koren обязателен: сторож выкачан в .ci-guard, и у того
+          # подкаталога свой .git. Без явного корня git rev-parse отдаёт
+          # корень сторожа, и он проверяет сам себя, сообщая «чисто».
+          # Проверено опытом: код 0 на репозитории, куда не заглядывали.
+          python .ci-guard/tools/check-secrets.py --all --koren .
+
+      - name: gitleaks
+        run: |
+          # Только текущее состояние файлов, без истории: пока история не
+          # вычищена, проход по ней падал бы каждый раз, и его бы отключили.
+          # --redact: не печатать найденные значения в публичный лог.
+          if [ ! -f "${{ inputs.gitleaks-config }}" ]; then
+            echo "Нет файла ${{ inputs.gitleaks-config }} — заведи его в своём репозитории."
+            exit 1
+          fi
+          VER="${{ inputs.gitleaks-version }}"
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VER}/gitleaks_${VER}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks detect --no-git --source . \
+            --config "${{ inputs.gitleaks-config }}" --redact --exit-code 1
+
+  sintaksis-js:
+    name: синтаксис JS
+    if: inputs.proveryat-js
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: node --check
+        run: |
+          # Скрипты Airtable сюда НЕ попадают, и это не упущение. Airtable
+          # оборачивает тело скрипта в асинхронный контекст и принимает
+          # аннотации TypeScript: верхнеуровневые await и return там законны,
+          # а для node это синтаксические ошибки. Отличаем по вызовам его API.
+          fail=0; checked=0; skipped=0
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            if grep -qE 'input\.(config|secret|textAsync)|base\.getTable|output\.set|cursor\.activeRecordId' "$f"; then
+              skipped=$((skipped+1)); continue
+            fi
+            checked=$((checked+1))
+            if ! node --check "$f" 2>/dev/null; then
+              # Верхнеуровневый await законен в модуле, но не в CommonJS.
+              cp "$f" /tmp/chk.mjs
+              if ! node --check /tmp/chk.mjs; then
+                echo "СИНТАКСИС: $f"; fail=1
+              fi
+            fi
+          done < <(git ls-files '*.js' | grep -v node_modules)
+          echo "проверено: $checked, пропущено скриптов Airtable: $skipped"
+          exit $fail

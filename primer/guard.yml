@@ -1,0 +1,15 @@
+# Скопировать в .github/workflows/guard.yml своего репозитория.
+name: guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  guard:
+    uses: x10company/ci-guard/.github/workflows/guard.yml@main
+    # Необязательно:
+    # with:
+    #   gitleaks-config: .gitleaks.toml
+    #   proveryat-js: false
