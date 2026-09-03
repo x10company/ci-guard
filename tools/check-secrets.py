@@ -62,6 +62,12 @@ REPO = _koren_iz_argumentov() or _repo_root()
 SKIP_DIRS = {
     ".git", "node_modules", "bin", "obj", "__pycache__", ".venv", "venv",
     ".vs", ".idea", "dist", "build", "packages", ".playwright",
+    # _probe — сохранённые страницы чужих сайтов из проб: их токены не наши,
+    # а разбирать их сторожу нечем, кроме шума.
+    "_probe",
+    # Профили браузеров: там куки и состояние сеансов. Это рабочие данные
+    # запущенных программ, а не наш код — сторожу там делать нечего.
+    "chromium-profile", "chrome-profile", "chrome_profile", "chrome-data",
 }
 SKIP_EXT = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".pdf", ".zip", ".gz",
@@ -123,6 +129,51 @@ ENTROPIYA = re.compile(
     r"^\s*(?P<name>[A-Za-z][A-Za-z0-9_.-]{1,40})\s*=\s*"
     r"(?P<val>[A-Za-z0-9_.~+/=-]{24,})\s*$")
 
+# Ключ в кавычках: NAME = "значение".
+#
+# Зачем отдельно от ENVLINE: то правило требует значение БЕЗ кавычек и работает
+# только в .env-подобных файлах. Из-за этого 22.08.2026 страж не видел пароль
+# root в BackUps/Leads/panel-tunnel.py — там было `PWD = "..."`, то есть имя
+# говорящее, а форма записи не совпала ни с одним образцом. Он же лежал в
+# google/wp-generator/.env и в BackUps/servers.md, и все три раза страж молчал.
+KAVYCHKI = re.compile(r"""(?ix)
+    \b (?P<name> [A-Za-z0-9_]* (?: KEY | TOKEN | SECRET | PASSWORD | PASSWD | PWD | PASS )
+                 [A-Za-z0-9_]* )
+    # Необязательная кавычка перед двоеточием — это json: "SecretKey": "…".
+    # Без неё правило не видело ключи Backblaze в api/appsettings.json, а файл
+    # лежит в git. Нашлось 23.08.2026, когда разбирали остаток находок.
+    ['"]? \s* [:=] \s*
+    (?P<q>['"]) (?P<val> [^'"\n]{16,} ) (?P=q)
+    """)
+
+# Запасное значение после чтения окружения: getenv("NAME", "ключ").
+#
+# Ровно тот случай, из-за которого сторож и заводился: ключ лежит не строкой,
+# а вторым аргументом, и глазами не находится. Прежние правила его не видели —
+# между именем и значением стоит запятая, а не знак равенства. Найдено 23.08.2026
+# в google/wp-generator: getenv("RUNWARE_API_KEY", "<живой ключ>") в двух файлах.
+ZAPASNOYE = re.compile(r"""(?ix)
+    (?: getenv | environ\.get ) \s* \( \s*
+    ['"] (?P<name> [A-Za-z0-9_]* (?: KEY | TOKEN | SECRET | PASSWORD | PASSWD | PWD )
+                   [A-Za-z0-9_]* ) ['"]
+    \s* , \s* ['"] (?P<val> [^'"\n]{16,} ) ['"]
+    """)
+
+# Подпись по-русски: «Пароль ключа: значение», в том числе в markdown с `**`.
+# Ни ENVLINE, ни ENTROPIYA такую строку не видят — там нет знака `=`.
+# Значение после подписи не должно выглядеть кодом или заглушкой: в прозе
+# и в markdown после «ключ:» чаще стоит выражение (`name.match(/.../)`),
+# фрагмент лога или пример вида `123456789:ABCdef...`, а не сам секрет.
+KOD_ILI_ZAGLUSHKA = re.compile("[" + re.escape("{}()[]$<>|/" + chr(92) + chr(96)) + "]" + "|[.]{3}|" + chr(8230))
+
+PODPIS_RU = re.compile(
+    r"(?i)(?:парол|ключ|токен|секрет)[^:\n]{0,24}:\s*\**\s*(?P<val>[^\s*][^\s]{15,})")
+
+# Файл, который целиком является секретом: имя намекает, внутри одна строка.
+# Так у нас лежал BackUps/ERP/.ssh_password — ни имени переменной, ни `=`,
+# зацепиться не за что, и страж честно отвечал «чисто».
+IMYA_SEKRETA = re.compile(r"(?i)(?:^|/)[^/]*(?:password|passwd|secret|\.key|\.pem)[^/]*$")
+
 # Идентификаторы Airtable — адреса, а не ключи: без токена по ним ничего не сделать.
 AIRTABLE_ID = re.compile(r"^(?:app|tbl|viw|fld|rec|pgl|usr|wfl)[A-Za-z0-9]{14,17}$")
 
@@ -136,6 +187,11 @@ def _entropiya(s):
 
 
 def pohozhe_na_klyuch(val):
+    # Обрамление снимаем до проверок. Иначе `fldXXXXXXXXXXXXXX` с прилипшей
+    # кавычкой перестаёт совпадать с AIRTABLE_ID и уходит в находки как ключ.
+    val = val.strip("'\"`«»()[]{}<>,.;:*")
+    if len(val) < 16:
+        return False
     if AIRTABLE_ID.match(val):
         return False
     if re.fullmatch(r"[0-9a-f]+", val):      # чистый hex: хеши коммитов, md5, sha
@@ -156,7 +212,21 @@ ALLOW = [
     re.compile(r"(?i)\b(?:xxx+|placeholder|example|sample|dummy|changeme|your[_-]\w+)\b"),
     re.compile(r"=\s*<[^>]+>\s*$"),
     re.compile(r"\b(?:0{16,}|1234567890)\b"),
+    # Заглушки из подряд идущего алфавита: patABCDEFGHIJ..., ABCdef123.
+    re.compile(r"(?i)abcdef|defghi|klmnop"),
+    # Заглушки из подряд идущих цифр вперемешку с abc: patABCD1234567890.xyz123abc.
+    re.compile(r"(?i)abcd1234|1234567890|xyz123"),
     re.compile(r"(?i)process\.env\.|os\.environ|GetEnvironmentVariable|input\.secret|\$env:"),
+    # Отпечаток открытого ключа — не секрет: он для сверки и печатается ssh-keygen.
+    re.compile(r"SHA256:[A-Za-z0-9+/=]{20,}"),
+    # Открытый ключ в DER/base64 (начинается на MII) — публичная часть, не секрет.
+    # Так лежит ключ расширения Chrome в manifest.json: он там обязателен и виден всем.
+    re.compile(r"MII[A-Za-z0-9+/=]{20,}"),
+    # Ссылка на переменную окружения, а не значение: "${X10_FOO}", "$FOO",
+    # "%X10_FOO%". Оболочка и .NET подставят их при запуске.
+    re.compile(r"[$][{]?[A-Za-z_][A-Za-z0-9_]*[}]?|%[A-Z][A-Z0-9_]+%"),
+    # Явные выдумки из документации: MySecurePassword, SuperSecret123 и подобное.
+    re.compile(r"(?i)(?:my|super|strong|test)(?:secure|secret|safe)?(?:password|pass|token)\w*"),
 ]
 
 # Какие каталоги считаем «внутри проекта». Абсолютный путь туда ломается при
@@ -209,6 +279,10 @@ ABS_PATH_EXT = {".js", ".cjs", ".mjs", ".py", ".cs", ".ps1", ".sh", ".bat", ".cm
 
 # Какие файлы считаем «env-подобными»: там ключи лежат голыми, без кавычек.
 ENVLIKE = re.compile(r"(?i)(?:^|/)\.env(?:\.|$)|(?:^|/)[^/]*\.env$|\.env\.[a-z]+$")
+
+# Расширения, которые смотрим в игнорируемых файлах: конфиги и выгрузки.
+# Крупные файлы обход и так пропускает по размеру.
+DANNYE_EXT = {".json", ".txt", ".ini", ".cfg", ".conf", ".yaml", ".yml", ".xml"}
 
 TEMPLATE = re.compile(r"(?i)\.(?:example|sample|template|dist)$|\.(?:example|sample|template)\.")
 
@@ -278,6 +352,97 @@ def check_import_order(rel, text, findings):
                          "упадёт при запуске, синтаксис при этом верный"))
 
 
+KLYUCH_ZAGOLOVOK = "-----BEGIN "
+
+
+def klyuchi_v_dereve(findings):
+    """Приватные ключи ищем обходом диска, а не через git.
+
+    Почему отдельно от всего остального. Список файлов страж берёт у git —
+    отслеживаемое плюс новое неигнорируемое. Это верно для коммита, но у него
+    есть слепое пятно: то, что в .gitignore, для git не существует, значит и для
+    стража не существует.
+
+    Именно так три копии ssh-ключа пролежали в рабочем дереве с 17.08 по
+    22.08.2026: строка `*_key` в .gitignore закрыла их от коммита в первый же
+    день — и в тот же день сделала невидимыми для проверки. В коммит они не
+    уедут, а вот в архив, в копию каталога или в чужие руки вместе с папкой —
+    уедут. Ключ должен лежать в C:\secrets, а в репозитории не лежать вовсе.
+
+    Поэтому здесь ходим по диску и смотрим только на первую строку файла:
+    заголовок приватного ключа. Правило намеренно узкое — библиотеки, где слово
+    PRIVATE KEY встречается в коде, первой строкой его не начинают.
+    """
+    envy = []
+    for koren, katalogi, fayly in os.walk(REPO):
+        katalogi[:] = [k for k in katalogi if k not in SKIP_DIRS]
+        for imya in fayly:
+            polnyy = os.path.join(koren, imya)
+            try:
+                if os.path.getsize(polnyy) > 20000:
+                    continue
+                with io.open(polnyy, encoding="utf-8", errors="strict") as f:
+                    pervaya = f.readline(80)
+            except (OSError, UnicodeDecodeError):
+                continue
+            if pervaya.startswith(KLYUCH_ZAGOLOVOK) and "PRIVATE KEY" in pervaya:
+                rel = os.path.relpath(polnyy, REPO).replace("\\", "/")
+                findings.append((rel, 1, "приватный ключ лежит в дереве",
+                                 "даже в .gitignore он остаётся на диске: место ключа — C:\secrets"))
+                continue
+            rel = os.path.relpath(polnyy, REPO).replace("\\", "/")
+            if TEMPLATE.search(rel):
+                continue
+            # Кроме .env берём конфиги и выгрузки данных: 23.08.2026 в игноре
+            # нашлись json с паролями к прокси, по одному на запись. Расширение
+            # ограничиваем нарочно — иначе в обход попадёт всё дерево.
+            if ENVLIKE.search(rel) or os.path.splitext(rel)[1].lower() in DANNYE_EXT:
+                envy.append((rel, polnyy))
+
+    # Секреты в .env, которые скрыты игнором. Правило про KEY=значение у стража
+    # есть с самого начала, но игнорируемые файлы он не открывает — и три .env
+    # из перенесённых проектов (wp-generator, accounts-farming-adspower, adheart)
+    # так и жили со своими копиями ключей. Проверяем ровно то, что игнор скрыл:
+    # отслеживаемые .env и без этого проходят обычным путём.
+    if not envy:
+        return
+    skrytye = _ignoriruyemye([rel for rel, _ in envy])
+    for rel, polnyy in envy:
+        if rel not in skrytye:
+            continue
+        try:
+            text = io.open(polnyy, encoding="utf-8", errors="strict").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for n, line in enumerate(text.splitlines(), 1):
+            # По образцам тоже: ключ Anthropic или PAT Airtable в скрытом .env
+            # правило «имя=длинное значение» пропускает, если энтропия ниже порога.
+            for label, pat in PATTERNS:
+                if pat.search(line):
+                    findings.append((rel, n, label + " в файле, скрытом игнором",
+                                     "значение должно приходить из X10_*"))
+                    break
+            m = ENVLINE.match(line)
+            if m and pohozhe_na_klyuch(m.group("val")):
+                findings.append((rel, n, "секрет в файле, скрытом игнором",
+                                 "своя копия ключа: значение должно приходить из X10_*"))
+
+
+def _ignoriruyemye(otnositelnye):
+    """Какие из путей git считает игнорируемыми. Один вызов на весь список."""
+    if not otnositelnye:
+        return set()
+    # Пути отдаём БАЙТАМИ, а не текстом. В текстовом режиме subprocess на Windows
+    # переводит перевод строки в CRLF, и git получает путь с прилипшим CR —
+    # такого файла нет, значит «не игнорируется». Проверено 23.08.2026: из трёх
+    # путей возвращался ровно последний — тот, к которому CR не приклеился.
+    stdin = (chr(10).join(otnositelnye) + chr(10)).encode("utf-8")
+    out = subprocess.run(["git", "check-ignore", "--stdin"],
+                         input=stdin, capture_output=True, cwd=REPO)
+    stdout = out.stdout.decode("utf-8", errors="replace")
+    return {x.strip().replace("\\", "/") for x in stdout.splitlines() if x.strip()}
+
+
 def check_file(rel, findings):
     full = os.path.join(REPO, rel)
     if not os.path.isfile(full):
@@ -300,9 +465,26 @@ def check_file(rel, findings):
     except (UnicodeDecodeError, OSError):
         return
 
+    if IMYA_SEKRETA.search(rel.replace("\\", "/")) and len(text) <= 400:
+        stroki = [x.strip() for x in text.splitlines() if x.strip()]
+        if len(stroki) == 1 and pohozhe_na_klyuch(stroki[0]):
+            findings.append((rel, 1, "файл целиком — секрет",
+                             stroki[0][:6] + "…"))
+
+    # Свой же исходник по правилам про форму записи не проверяем: в нём лежат
+    # определения образцов, а не значения.
+    svoy = rel.replace("\\", "/").endswith("tools/check-secrets.py")
+
     for n, line in enumerate(text.splitlines(), 1):
         if len(line) > 4000:          # минифицированный бандл — не наш код
             continue
+
+        # Запасное значение проверяем ДО списка исключений, и вот почему.
+        # В ALLOW есть строка про os.environ и process.env — она гасит шум на
+        # коде, который читает окружение. Но именно на таких строках и живёт
+        # опасный случай: getenv("KEY", "живой ключ"). Проверь его после ALLOW —
+        # и правило не сработает никогда.
+
         if is_allowed(line):
             continue
         for label, pat in PATTERNS:
@@ -313,6 +495,19 @@ def check_file(rel, findings):
         if m:
             findings.append((rel, n, "ключ в переменной с говорящим именем",
                              m.group(1)[:8] + "…"))
+        m = None if svoy else KAVYCHKI.search(line)
+        # `cachekey`, `sortkey` и подобные содержат KEY, но секретом не являются.
+        if m and not re.search(r"(?i)cache|sort|idempot", m.group("name")) and pohozhe_na_klyuch(m.group("val")):
+            findings.append((rel, n, "значение в кавычках у " + m.group("name"),
+                             m.group("val")[:6] + "…"))
+        m = None if svoy else PODPIS_RU.search(line)
+        if m and not KOD_ILI_ZAGLUSHKA.search(m.group("val")) and pohozhe_na_klyuch(m.group("val")):
+            findings.append((rel, n, "секрет после русской подписи",
+                             m.group("val")[:6] + "…"))
+        m = None if svoy else ZAPASNOYE.search(line)
+        if m and pohozhe_na_klyuch(m.group("val")):
+            findings.append((rel, n, "запасное значение у " + m.group("name"),
+                             m.group("val")[:6] + "…"))
 
         # .env и подобные: KEY=длинное_значение.
         # В файлах-образцах (.env.example) строки KEY= — это их содержание, так что
@@ -373,6 +568,14 @@ PROBY = [
      "-----BEGIN " + "RSA PRIVATE KEY-----"),
     ("случайное значение", "_proba.md",
      "sav=" + "4iXxezjOuBENxVe3y3mdfjN2pOAXi7KDzL6qVrkZ"),
+    ("значение в кавычках", "_proba.py",
+     'PWD = "' + "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8" + '"'),
+    ("секрет после подписи", "_proba.md",
+     "- **" + chr(1055) + "ароль ключа:** " + "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
+    ("файл целиком секрет", "_proba_password.txt",
+     "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
+    ("запасное значение", "_proba.py",
+     'K = os.getenv("RUNWARE_API_KEY", "' + "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8" + '")'),
 ]
 
 
@@ -437,6 +640,8 @@ def main():
     findings = []
     for rel in iter_files(mode, a.files):
         check_file(rel, findings)
+    if mode == "all" and not a.files:
+        klyuchi_v_dereve(findings)
 
     print("  сторож: корень %s, файлов %d" % (REPO, len(list(iter_files(mode, a.files)))))
     if not findings:
