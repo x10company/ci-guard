@@ -1,0 +1,9 @@
+{
+  "_": "Скопировать в .claude/settings.json своего репозитория. Тогда всякий, кто откроет репозиторий, получит общие своды правил без установки руками.",
+  "extraKnownMarketplaces": {
+    "x10company": {
+      "source": { "source": "github", "repo": "x10company/claude-skills" }
+    }
+  },
+  "enabledPlugins": { "x10-obshchie@x10company": true }
+}
