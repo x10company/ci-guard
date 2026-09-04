@@ -1,9 +1,11 @@
 {
-  "_": "Скопировать в .claude/settings.json своего репозитория. Тогда всякий, кто откроет репозиторий, получит общие своды правил без установки руками.",
+  "_": "Подключает маркетплейс x10company, но плагин здесь НЕ включает. enabledPlugins в настройках проекта создаёт вторую копию плагина, замороженную на той версии, что лежала в кэше в момент раскладки: claude plugin update двигает только уровень пользователя, и версии расходятся молча. Проверено 04.09.2026 — на одной машине оказалось три копии: user 1.2.0, project 1.0.0, project 1.1.0. Ставить один раз на машину: claude plugin install x10-obshchie@x10company",
   "extraKnownMarketplaces": {
     "x10company": {
-      "source": { "source": "github", "repo": "x10company/claude-skills" }
+      "source": {
+        "source": "github",
+        "repo": "x10company/claude-skills"
+      }
     }
-  },
-  "enabledPlugins": { "x10-obshchie@x10company": true }
+  }
 }
