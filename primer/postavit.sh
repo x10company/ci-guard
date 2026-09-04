@@ -16,12 +16,15 @@ BAZA="https://raw.githubusercontent.com/x10company/ci-guard/main/primer"
 PEREZAPISAT=0
 [ "${1:-}" = "--perezapisat" ] && PEREZAPISAT=1
 
-# откуда|куда|зачем
+# откуда|куда|зачем|беречь
+# «беречь» = не перезаписывать даже с --perezapisat. Такой файл у проекта свой,
+# и подмена его нашим может открыть то, что он закрывал: 04.09.2026 перезапись
+# .gitignore открыла пять фикстур с настоящими ключами подписки.
 NABOR="
-guard.yml|.github/workflows/guard.yml|проход CI: ключи, gitleaks, синтаксис
-settings.json|.claude/settings.json|своды правил подключаются при открытии
-gitleaks.toml|.gitleaks.toml|исключения поиска ключей, свои у проекта
-gitignore|.gitignore|без него в коммит уедет __pycache__
+guard.yml|.github/workflows/guard.yml|проход CI: ключи, gitleaks, синтаксис|net
+settings.json|.claude/settings.json|регистрирует маркетплейс со сводами|net
+gitleaks.toml|.gitleaks.toml|исключения поиска ключей, свои у проекта|da
+gitignore|.gitignore|без него в коммит уедет __pycache__|da
 "
 
 if [ ! -d .git ]; then
@@ -37,16 +40,30 @@ echo
 polozheno=0
 propushcheno=0
 
-while IFS='|' read -r ottuda kuda zachem; do
+while IFS='|' read -r ottuda kuda zachem berech; do
   [ -z "$ottuda" ] && continue
 
   katalog=$(dirname "$kuda")
   [ "$katalog" != "." ] && mkdir -p "$katalog"
 
+  if [ -e "$kuda" ] && [ "$berech" = "da" ]; then
+    printf '    - %-32s уже есть, НЕ трогаю (свой у проекта)\n' "$kuda"
+    propushcheno=$((propushcheno + 1))
+    continue
+  fi
+
   if [ -e "$kuda" ] && [ "$PEREZAPISAT" -eq 0 ]; then
     printf '    - %-32s уже есть, пропускаю\n' "$kuda"
     propushcheno=$((propushcheno + 1))
     continue
+  fi
+
+  # Перезаписываем только с резервной копией: вернуть прежний файл должно быть
+  # можно без git — набор кладут и в репозиторий с грязным деревом.
+  if [ -e "$kuda" ]; then
+    rezerv="$kuda.bak-$(date +%Y%m%d-%H%M%S)"
+    cp -p "$kuda" "$rezerv"
+    printf '      прежний сохранён: %s\n' "$rezerv"
   fi
 
   # Во временный файл, а не сразу на место: оборванная закачка иначе оставит
@@ -69,7 +86,9 @@ echo "  Положено: $polozheno, пропущено: $propushcheno"
 
 if [ "$propushcheno" -gt 0 ]; then
   echo "  Пропущенные не перезаписаны намеренно: у проекта могут быть свои."
-  echo "  Нужно заменить — скачай скрипт и запусти с --perezapisat."
+  echo "  .gitignore и .gitleaks.toml не заменяются даже с --perezapisat:"
+  echo "  подмена своего файла нашим может открыть то, что он закрывал."
+  echo "  Нужно сравнить — открой primer/ в ci-guard и перенеси нужное руками."
 fi
 
 # Ловушка, на которой уже обожглись в ApiX10: guard.yml приехал с веткой main,
@@ -77,12 +96,14 @@ fi
 vetka=$(git symbolic-ref --short HEAD 2>/dev/null || true)
 if [ -n "$vetka" ] && [ "$vetka" != "main" ]; then
   echo
-  echo "  ВНИМАНИЕ: ветка «$vetka», а guard.yml запускается на main."
-  echo "  Поправь branches в .github/workflows/guard.yml, иначе проход"
-  echo "  не запустится ни разу и об этом никто не узнает."
+  echo "  ВНИМАНИЕ: ветка «$vetka», а push-триггер guard.yml стоит на main."
+  echo "  На pull request проход всё равно пойдёт: фильтра ветки там нет."
+  echo "  Но прямые коммиты в «$vetka» проверяться не будут. Работаете без"
+  echo "  pull request — поправьте branches, иначе проход не пойдёт ни разу."
 fi
 
 echo
-echo "  Дальше: закоммить эти файлы. После пуша проход CI заработает сам,"
-echo "  а открывший репозиторий получит своды правил без установки."
+echo "  Дальше: закоммить эти файлы. После пуша проход CI заработает сам."
+echo "  Своды правил ставятся один раз на машину, не на репозиторий:"
+echo "    claude plugin install x10-obshchie@x10company"
 echo
