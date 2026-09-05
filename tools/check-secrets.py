@@ -660,7 +660,22 @@ def main():
     if mode == "all" and not a.files:
         klyuchi_v_dereve(findings)
 
-    print("  сторож: корень %s, файлов %d" % (REPO, len(list(iter_files(mode, a.files)))))
+    skolko = len(list(iter_files(mode, a.files)))
+    print("  сторож: корень %s, файлов %d" % (REPO, skolko))
+
+    # Ноль файлов — это «ничего не проверено», а не «всё хорошо». Свод proverki
+    # про это и написан, а сторож сам нарушал правило: 05.09.2026 он ответил
+    # «чисто» на каталоге в облачном диске, не прочитав ни одного файла.
+    if skolko == 0:
+        print("")
+        print("  ОСТАНОВЛЕНО: не прочитано ни одного файла — проверять было нечего.")
+        print("  Это не «чисто». Причины бывают такие:")
+        print("    - каталог не репозиторий, а ключ --all не передан;")
+        print("    - путь не существует или недоступен;")
+        print("    - всё содержимое отсечено игнором.")
+        print("")
+        return 1
+
     if not findings:
         print("check-secrets: чисто")
         return 0
