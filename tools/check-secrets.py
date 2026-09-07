@@ -59,8 +59,15 @@ def _koren_iz_argumentov():
 
 REPO = _koren_iz_argumentov() or _repo_root()
 
+# «bin» здесь НЕТ намеренно. В проектах .NET это выхлоп, а в проектах на
+# скриптах — каталог с КОДОМ: у трёх наших направлений весь продукт лежит именно
+# в bin/, и сторож их не проверял вовсе. Найдено 07.09.2026.
+#
+# Та же ошибка была в .gitignore набора и там уже исправлена — а здесь осталась.
+# Одно знание («bin — это выхлоп») жило в двух местах, починили одно.
+# Выхлоп сборки отсекается ниже, по SKIP_PUTI, парой каталогов.
 SKIP_DIRS = {
-    ".git", "node_modules", "bin", "obj", "__pycache__", ".venv", "venv",
+    ".git", "node_modules", "obj", "__pycache__", ".venv", "venv",
     ".vs", ".idea", "dist", "build", "packages", ".playwright",
     # _probe — сохранённые страницы чужих сайтов из проб: их токены не наши,
     # а разбирать их сторожу нечем, кроме шума.
@@ -69,6 +76,17 @@ SKIP_DIRS = {
     # запущенных программ, а не наш код — сторожу там делать нечего.
     "chromium-profile", "chrome-profile", "chrome_profile", "chrome-data",
 }
+
+# Пропускаем не по имени каталога, а по паре: так «bin» с кодом остаётся под
+# проверкой, а выхлоп сборки — нет.
+SKIP_PUTI = ("bin/Debug", "bin/Release", "bin/x64", "bin/x86")
+
+
+def propustit_put(rel):
+    """Отсечь выхлоп сборки, не отсекая каталоги кода с тем же именем."""
+    put = rel.replace("\\", "/")
+    return any(("/" + kus + "/") in ("/" + put) or put.startswith(kus + "/")
+               for kus in SKIP_PUTI)
 SKIP_EXT = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".pdf", ".zip", ".gz",
     ".7z", ".rar", ".exe", ".dll", ".pdb", ".so", ".dylib", ".mp4", ".avi",
@@ -389,6 +407,8 @@ def klyuchi_v_dereve(findings):
     envy = []
     for koren, katalogi, fayly in os.walk(REPO):
         katalogi[:] = [k for k in katalogi if k not in SKIP_DIRS]
+        if propustit_put(os.path.relpath(koren, REPO)):
+            continue
         for imya in fayly:
             polnyy = os.path.join(koren, imya)
             try:
@@ -461,7 +481,7 @@ def check_file(rel, findings):
     if not os.path.isfile(full):
         return
     parts = rel.replace("\\", "/").split("/")
-    if any(p in SKIP_DIRS for p in parts):
+    if any(p in SKIP_DIRS for p in parts) or propustit_put(rel):
         return
     ext = os.path.splitext(rel)[1].lower()
 
