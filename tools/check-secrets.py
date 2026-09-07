@@ -476,7 +476,7 @@ def _ignoriruyemye(otnositelnye):
     return {x.strip().replace("\\", "/") for x in stdout.splitlines() if x.strip()}
 
 
-def check_file(rel, findings):
+def check_file(rel, findings, prochitano=None):
     full = os.path.join(REPO, rel)
     if not os.path.isfile(full):
         return
@@ -497,6 +497,12 @@ def check_file(rel, findings):
         text = io.open(full, encoding="utf-8", errors="strict").read()
     except (UnicodeDecodeError, OSError):
         return
+    # Отмечаемся ровно здесь: выше все выходы — это «файл не смотрели»
+    # (пропущенный каталог, двоичное расширение, слишком большой). Счётчик
+    # обязан считать прочитанное, иначе правило «ноль прочитанных — ошибка»
+    # опирается на число, которое растёт от пропусков.
+    if prochitano is not None:
+        prochitano.add(rel)
 
     if IMYA_SEKRETA.search(rel.replace("\\", "/")) and len(text) <= 400:
         stroki = [x.strip() for x in text.splitlines() if x.strip()]
@@ -675,13 +681,16 @@ def main():
     mode = "staged" if a.staged else "all"
 
     findings = []
-    for rel in iter_files(mode, a.files):
-        check_file(rel, findings)
+    spisok = list(iter_files(mode, a.files))
+    prochitano = set()
+    for rel in spisok:
+        check_file(rel, findings, prochitano)
     if mode == "all" and not a.files:
         klyuchi_v_dereve(findings)
 
-    skolko = len(list(iter_files(mode, a.files)))
-    print("  сторож: корень %s, файлов %d" % (REPO, skolko))
+    skolko = len(spisok)
+    print("  сторож: корень %s, файлов %d, прочитано %d"
+          % (REPO, skolko, len(prochitano)))
 
     # Ноль файлов — это «ничего не проверено», а не «всё хорошо». Свод proverki
     # про это и написан, а сторож сам нарушал правило: 05.09.2026 он ответил
@@ -703,6 +712,17 @@ def main():
         print("    - каталог не репозиторий, а ключ --all не передан;")
         print("    - путь не существует или недоступен;")
         print("    - всё содержимое отсечено игнором.")
+        print("")
+        return 1
+
+    # Найдено много, прочитано ноль — это тоже «ничего не проверено», и до
+    # 07.09.2026 сторож отвечал на такое «чисто». Нашло направление свифтбар:
+    # на репозитории с единственным файлом в пропускаемом bin/Debug счётчик
+    # показывал 1, а прочитан был ноль.
+    if len(prochitano) == 0 and mode == "all":
+        print("")
+        print("  ОСТАНОВЛЕНО: файлов %d, а прочитан ноль." % skolko)
+        print("  Это не «чисто»: всё содержимое отсечено расширением или путём.")
         print("")
         return 1
 
