@@ -91,7 +91,7 @@ if [ "$propushcheno" -gt 0 ]; then
   echo "  Нужно сравнить — открой primer/ в ci-guard и перенеси нужное руками."
 fi
 
-# Ловушка, на которой уже обожглись в ApiX10: guard.yml приехал с веткой main,
+# Ловушка, на которой уже обожглись: guard.yml приехал с веткой main,
 # а репозиторий жил на master — проход не запустился ни разу и молчал.
 vetka=$(git symbolic-ref --short HEAD 2>/dev/null || true)
 if [ -n "$vetka" ] && [ "$vetka" != "main" ]; then
