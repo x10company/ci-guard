@@ -28,7 +28,9 @@ git -C "$MARKET" fetch -q origin 2>/dev/null || {
   echo "  до GitHub не достучаться — сужу по тому, что скачано ранее"; }
 
 otstal=0
-printf '  %-16s %-12s %-12s %s\n' плагин опубликовано "на диске" ""
+# Ширину считаем сами: printf меряет байты, а кириллица весит по два —
+# заголовок из русских слов разъезжается с латинскими строками под ним.
+echo "  плагин           опубликовано  на диске"
 for p in x10-obshchie x10-hozyaystvo; do
   tam=$(git -C "$MARKET" show "origin/main:plugins/$p/.claude-plugin/plugin.json" 2>/dev/null \
         | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
