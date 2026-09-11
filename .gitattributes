@@ -1,12 +1,8 @@
-# Переводы строк для скриптов — только LF, и в рабочей копии тоже.
-#
-# Иначе на Windows git выдаёт .sh с 
-, файл уезжает на сервер и падает там
-# с невнятным «bad interpreter». Локальный bash -n этого не ловит: он терпит
-# лишний . У нас это уже случалось.
+# Shell scripts: LF only, including the working copy.
+# CRLF in .sh dies on the server with "bad interpreter"; local bash -n tolerates it.
 *.sh   text eol=lf
 *.bash text eol=lf
 
-# PowerShell наоборот: 5.1 читает файл без BOM как ANSI, кириллица разваливается
-# на разборе. Держим CRLF, BOM ставится при записи.
+# PowerShell: CRLF, and write the file with a BOM.
+# Windows PowerShell 5.1 reads a BOM-less file as ANSI and mangles Cyrillic.
 *.ps1  text eol=crlf
