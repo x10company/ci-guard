@@ -105,14 +105,26 @@ if est gh && gh auth status >/dev/null 2>&1; then
   done <<< "$(gh repo list x10company --limit 100 --json name --jq '.[].name' 2>/dev/null | sort)"
 
   if [ "$nety" -gt 0 ]; then
-    printf '\n    Забрать недостающие (%s шт.):\n\n' "$nety"
-    printf '      cd %s\n' "$(printf '%q' "$KORNI")"
-    while IFS= read -r imya; do
-      [ -z "$imya" ] && continue
-      [ -d "$KORNI/$imya/.git" ] || printf '      git clone https://github.com/x10company/%s.git\n' "$imya"
-    done <<< "$(gh repo list x10company --limit 100 --json name --jq '.[].name' 2>/dev/null | sort)"
+    cat <<KONEC
+
+    Здесь нет $nety из них — и это НЕ список к исполнению.
+    Забирать надо только то, над чем работают на ЭТОЙ машине.
+
+    Не забирать без нужды:
+      • направление ведёт другая машина — два чата в одном репозитории
+        не синхронизация, а состязание правок;
+      • то, что привязано к своей машине: боевые выкладки, расписание,
+        живые сессии. Код приедет, работать не будет;
+      • своды правил: они приезжают плагином, клон для них не нужен.
+
+    Когда нужно — по одному:
+
+      cd $(printf '%q' "$KORNI") && git clone https://github.com/x10company/ИМЯ.git
+KONEC
   else
-    printf '\n    Все репозитории организации уже здесь.\n'
+    printf '
+    Все репозитории организации уже здесь.
+'
   fi
 else
   echo "    нет gh или нет входа — перечень пропущен"
