@@ -34,19 +34,72 @@ git -C "$MARKET" fetch -q origin 2>/dev/null || {
   echo "  до GitHub не достучаться — сужу по тому, что скачано ранее"; }
 
 otstal=0
-# Ширину считаем сами: printf меряет байты, а кириллица весит по два —
-# заголовок из русских слов разъезжается с латинскими строками под ним.
+neyasno=0
+
+# Разбираем JSON разбором, а не sed-диапазоном до "]": на однострочном файле
+# диапазон не кончается там, где кончается запись плагина, и head -1 отдаёт
+# ЧУЖУЮ версию — молча, без ошибки. Поймано направлением 11.09.2026.
+PY=$(command -v python3 || command -v python) || {
+  echo "  нет python — разобрать список установленных плагинов нечем"; exit 2; }
+
+# Читает version из plugin.json, поданного на вход.
+versiya_iz_json() {
+  "$PY" - <<'KONEC'
+import json, sys
+try:
+    print(json.load(sys.stdin)["version"])
+except Exception:
+    print("")
+KONEC
+}
+
+versiya_na_diske() {
+  "$PY" - "$USTANOVLENO" "$1" <<'KONEC'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+    print(d["plugins"]["%s@x10company" % sys.argv[2]][0]["version"])
+except Exception:
+    print("")
+KONEC
+}
+
 echo "  плагин           опубликовано  на диске"
 for p in x10-obshchie x10-hozyaystvo; do
-  tam=$(git -C "$MARKET" show "origin/main:plugins/$p/.claude-plugin/plugin.json" 2>/dev/null \
-        | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  tut=$(sed -n "/\"$p@x10company\"/,/]/p" "$USTANOVLENO" \
-        | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  [ -n "$tam" ] || tam="?"
-  [ -n "$tut" ] || tut="нет"
-  if [ "$tam" = "$tut" ]; then metka="свежо"; else metka="ОТСТАЛ"; otstal=1; fi
-  printf '  %-16s %-12s %-12s %s\n' "$p" "$tam" "$tut" "$metka"
+  # Тоже питоном, а не sed: обратный слэш в замене на пути из bash в файл
+  # однажды уже превратился в управляющий символ, и подстановка вернула мусор.
+  tam=$(git -C "$MARKET" show "origin/main:plugins/$p/.claude-plugin/plugin.json" 2>/dev/null | versiya_iz_json)
+  tut=$(versiya_na_diske "$p")
+  # Незнание — не отставание. Прежде пустой ответ сравнивался с версией, не
+  # совпадал и объявлялся «ОТСТАЛ»: скрипт толкал обновляться, ничего не
+  # проверив. Третий исход обязателен.
+  if [ -z "$tam" ] || [ -z "$tut" ]; then
+    [ -n "$tam" ] || tam="не видно"
+    [ -n "$tut" ] || tut="не видно"
+    metka="СРАВНИТЬ НЕ С ЧЕМ"; neyasno=1
+  elif [ "$tam" = "$tut" ]; then
+    metka="свежо"
+  else
+    metka="ОТСТАЛ"; otstal=1
+  fi
+  printf '  %-16s %-13s %-12s %s
+' "$p" "$tam" "$tut" "$metka"
 done
+
+if [ "$neyasno" -eq 1 ]; then
+  cat <<'KONEC'
+
+  Сравнить не с чем: какую-то из версий прочитать не удалось.
+  Причины бывают разные — GitHub недоступен, плагин переименован в
+  маркетплейсе, ветка другая, клон битый. Обновляться на этом основании НЕ надо:
+  скрипт не знает, отстали вы или нет, и врать в эту сторону не станет.
+
+  Посмотреть руками:
+    claude plugin list
+    git -C ~/.claude/plugins/marketplaces/x10company log --oneline -1 origin/main
+KONEC
+  exit 2
+fi
 
 echo
 if [ "$otstal" -eq 1 ]; then
