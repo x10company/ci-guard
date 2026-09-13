@@ -42,17 +42,17 @@ neyasno=0
 PY=$(command -v python3 || command -v python) || {
   echo "  нет python — разобрать список установленных плагинов нечем"; exit 2; }
 
-# Читает version из plugin.json, поданного на вход.
+# Читает version из plugin.json, переданного ДОВОДОМ, а не вводом:
+# стандартный ввод у питона занят самим текстом программы.
 versiya_iz_json() {
-  "$PY" - <<'KONEC'
+  "$PY" - "$1" <<'KONEC'
 import json, sys
 try:
-    print(json.load(sys.stdin)["version"])
+    print(json.loads(sys.argv[1])["version"])
 except Exception:
     print("")
 KONEC
 }
-
 versiya_na_diske() {
   "$PY" - "$USTANOVLENO" "$1" <<'KONEC'
 import json, sys
@@ -68,7 +68,8 @@ echo "  плагин           опубликовано  на диске"
 for p in x10-obshchie x10-hozyaystvo; do
   # Тоже питоном, а не sed: обратный слэш в замене на пути из bash в файл
   # однажды уже превратился в управляющий символ, и подстановка вернула мусор.
-  tam=$(git -C "$MARKET" show "origin/main:plugins/$p/.claude-plugin/plugin.json" 2>/dev/null | versiya_iz_json)
+  tekst=$(git -C "$MARKET" show "origin/main:plugins/$p/.claude-plugin/plugin.json" 2>/dev/null)
+  tam=$(versiya_iz_json "$tekst")
   tut=$(versiya_na_diske "$p")
   # Незнание — не отставание. Прежде пустой ответ сравнивался с версией, не
   # совпадал и объявлялся «ОТСТАЛ»: скрипт толкал обновляться, ничего не
