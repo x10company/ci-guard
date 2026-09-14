@@ -108,6 +108,8 @@ PATTERNS = [
     ("Slack-токен",         re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
     ("ключ Anthropic",      re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
     ("ключ OpenAI",         re.compile(r"\bsk-[A-Za-z0-9]{32,}\b")),
+    ("токен GitHub",        re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("токен GitHub (pat)",  re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b")),
 ]
 
 # Файлы вида KEY=значение (.env и подобные). Там ключи лежат не в кавычках и не
@@ -127,7 +129,11 @@ ENVLINE = re.compile(
 # иначе ловится каждый хеш коммита и каждый md5 в дампе
 HEXKEY = re.compile(
     r"""(?ix)
-    \b (?: api[_-]?key | apikey | secret | token | password | passwd | pwd | auth[_-]?key )
+    # Ведущий \b не годится: в SERVICE_API_KEY перед API стоит подчёркивание,
+    # а оно символ слова — границы нет, правило молчит. Требуем не-букву,
+    # тогда SCREAMING_SNAKE ловится, а monkey — нет.
+    (?: ^ | [^A-Za-z0-9] )
+    (?: api[_-]?key | apikey | secret | token | password | passwd | pwd | auth[_-]?key )
     \b [^\n]{0,20} ['"] ([a-f0-9]{32,64}) ['"]
     """
 )
@@ -190,6 +196,19 @@ ZAPASNOYE = re.compile(r"""(?ix)
     \s* , \s* ['"] (?P<val> [^'"\n]{16,} ) ['"]
     """)
 
+
+# Запасное значение в другой форме: process.env.KEY || "значение".
+# ZAPASNOYE знала только getenv() и environ.get(), а ALLOW гасила такую строку
+# целиком по образцу process.env. — то есть самая ходовая в JS форма зашитого
+# запасного ключа не проверялась ничем. Нашло направление 13.09.2026.
+ZAPASNOYE_ILI = re.compile(r"""(?ix)
+    (?: process \. env \. | env \. )
+    (?P<name> [A-Za-z0-9_]* (?: KEY | TOKEN | SECRET | PASSWORD | PASSWD | PWD )
+              [A-Za-z0-9_]* )
+    \s* (?: \|\| | \?\? ) \s*
+    ['"] (?P<val> [^'"\n]{16,} ) ['"]
+    """)
+
 # Подпись по-русски: «Пароль ключа: значение», в том числе в markdown с `**`.
 # Ни ENVLINE, ни ENTROPIYA такую строку не видят — там нет знака `=`.
 # Значение после подписи не должно выглядеть кодом или заглушкой: в прозе
@@ -225,7 +244,10 @@ def pohozhe_na_klyuch(val):
         return False
     if AIRTABLE_ID.match(val):
         return False
-    if re.fullmatch(r"[0-9a-f]+", val):      # чистый hex: хеши коммитов, md5, sha
+    # Прежде отбрасывался ЛЮБОЙ чистый hex, и вместе с хешами уходили
+    # 32-значные ключи сервисов — а таких большинство. Отбрасываем только
+    # длины, типичные для хешей.
+    if re.fullmatch(r"[0-9a-f]+", val) and len(val) in (7, 8, 10, 12, 40, 64):
         return False
     if re.fullmatch(r"[0-9]+", val):
         return False
@@ -523,6 +545,19 @@ def check_file(rel, findings, prochitano=None):
         # коде, который читает окружение. Но именно на таких строках и живёт
         # опасный случай: getenv("KEY", "живой ключ"). Проверь его после ALLOW —
         # и правило не сработает никогда.
+
+        # 13.09.2026: комментарий выше обещал этот порядок, а код его не делал —
+        # ALLOW с образцом process.env. гасил строку целиком, и запасное
+        # значение не проверялось никогда. Защита была описана и не сделана.
+        m = None if svoy else ZAPASNOYE.search(line)
+        if m and pohozhe_na_klyuch(m.group("val")):
+            findings.append((rel, n, "запасное значение у " + m.group("name"),
+                             m.group("val")[:6] + "…"))
+
+        mi = None if svoy else ZAPASNOYE_ILI.search(line)
+        if mi and pohozhe_na_klyuch(mi.group("val")):
+            findings.append((rel, n, "запасное значение у " + mi.group("name"),
+                             mi.group("val")[:6] + "…"))
 
         if is_allowed(line):
             continue
