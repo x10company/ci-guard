@@ -28,3 +28,9 @@ _proba*
 .env
 .env.*
 !.env.example
+
+# Мусор файловых менеджеров. Репозитории у нас правятся и с Windows, и с мака —
+# один клон на маке наплодил три .DS_Store за день, и git add -A увёз бы их.
+.DS_Store
+Thumbs.db
+desktop.ini
