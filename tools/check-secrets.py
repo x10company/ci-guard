@@ -254,6 +254,20 @@ IMYA_SEKRETA = re.compile(r"(?i)(?:^|/)[^/]*(?:password|passwd|secret|\.key|\.pe
 # Идентификаторы Airtable — адреса, а не ключи: без токена по ним ничего не сделать.
 AIRTABLE_ID = re.compile(r"^(?:app|tbl|viw|fld|rec|pgl|usr|wfl)[A-Za-z0-9]{14,17}$")
 
+# Ссылка на секрет в 1Password: op://<сейф>/<запись>[/<раздел>]/<поле>.
+# Довод тот же, что у Airtable: это АДРЕС, а не значение. Без доступа к сейфу
+# по нему не открыть ничего, и в репозитории такой строке самое место — ради
+# этого переход на 1Password и затевается.
+#
+# Без правила страж останавливает КАЖДЫЙ op.env: видит слева имя вида *_KEY,
+# справа длинную строку — и честно объявляет секретом. Поймано 18.09.2026 на
+# первом же переезде (x10company/keitaro).
+#
+# Пробелы внутри разрешены намеренно: имена сейфов и записей их содержат
+# («Keitaro (админка) | IM EK GG RI»). Перевод строки — нет: значение в env-файле
+# занимает ровно одну строку, и без этого запрета образец совпал бы с абзацем.
+OP_SSYLKA = re.compile(r"^op://[^/\n]+(?:/[^/\n]+){2,3}$")
+
 
 def _entropiya(s):
     """Энтропия Шеннона в битах на символ."""
@@ -270,6 +284,8 @@ def pohozhe_na_klyuch(val):
     if len(val) < 16:
         return False
     if AIRTABLE_ID.match(val):
+        return False
+    if OP_SSYLKA.match(val):
         return False
     # Прежде отбрасывался ЛЮБОЙ чистый hex, и вместе с хешами уходили
     # 32-значные ключи сервисов — а таких большинство. Отбрасываем только
@@ -619,9 +635,15 @@ def check_file(rel, findings, prochitano=None):
         # В файлах-образцах (.env.example) строки KEY= — это их содержание, так что
         # правило по длине там даёт только шум. Настоящие ключи в образцах всё равно
         # поймаются выше, по образцам PATTERNS.
+        # Адрес 1Password — исключение отдельной строкой, потому что здесь
+        # правило НЕ спрашивает pohozhe_na_klyuch: в .env-файле любая пара
+        # имя=значение раньше и была секретом по определению. С переходом на
+        # 1Password это перестало быть верным — op.env целиком состоит из
+        # адресов, и без исключения страж останавливает каждый такой файл.
         if ENVLIKE.search(rel) and not TEMPLATE.search(rel):
             m = ENVLINE.match(line)
-            if m and not m.group("val").startswith("<"):
+            if (m and not m.group("val").startswith("<")
+                    and not OP_SSYLKA.match(m.group("val"))):
                 findings.append((rel, n, "значение в " + m.group("name"),
                                  m.group("val")[:6] + "…"))
         # Любое имя = случайное значение. Работает во всех файлах, включая .md:
@@ -696,6 +718,32 @@ PROBY = [
 ]
 
 
+# Пробы наоборот: на это страж ругаться НЕ должен.
+#
+# Нужны потому, что ошибка в исключении незаметна с той стороны, с какой мы
+# обычно смотрим: она не кричит, а молчит. Обнаруживается тем, что человек
+# однажды не может закоммитить совершенно нормальный файл, — и, не поняв
+# причины, отключает стража целиком.
+#
+# Проверяем сам образец, а не путь через файл: файл с расширением .env может
+# не попасть в обход, и проба прошла бы вхолостую, ничего не проверив.
+PROBY_TIHIE = [
+    ("адрес 1Password",
+     "op://" + "Keitaro (админка) | IM EK GG RI" + "/Keitaro API/credential"),
+    ("адрес 1Password по идентификаторам",
+     "op://" + "b3bxsvbhif3id7jezl5rhmacvq" + "/5h4gm2iaczcliaqficdpoufspm/hostname"),
+    ("адрес 1Password с разделом",
+     "op://" + "Sejf/Zapis/Razdel/credential"),
+]
+
+# А это страж обязан считать ключом даже после добавления исключения: проверяем,
+# что образец `op://` не открыл дорогу чему попало.
+PROBY_TIHIE_NAOBOROT = [
+    ("случайный ключ рядом с исключением", "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
+    ("op без трёх частей", "op://" + "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
+]
+
+
 def samoproverka():
     """Каждый образец проверяется на им же построенной пробе."""
     print()
@@ -732,14 +780,29 @@ def samoproverka():
         print("  %-24s %s" % (imya, "видит" if poyman else "НЕ ВИДИТ"))
         if not poyman:
             provaleno.append(imya)
+    # Пробы наоборот: исключения не должны ослеплять стража и не должны
+    # мешать нормальным файлам.
+    print()
+    for imya, val in PROBY_TIHIE:
+        molchit = not pohozhe_na_klyuch(val)
+        print("  %-38s %s" % (imya, "молчит" if molchit else "РУГАЕТСЯ ЗРЯ"))
+        if not molchit:
+            provaleno.append(imya + " (ругается зря)")
+    for imya, val in PROBY_TIHIE_NAOBOROT:
+        vidit = pohozhe_na_klyuch(val)
+        print("  %-38s %s" % (imya, "видит" if vidit else "НЕ ВИДИТ"))
+        if not vidit:
+            provaleno.append(imya + " (исключение прорезало дыру)")
+
+    vsego = len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT)
     print()
     if provaleno:
-        print("  ОСТАНОВЛЕНО: страж перестал видеть %d образцов из %d:"
-              % (len(provaleno), len(PROBY)))
+        print("  ОСТАНОВЛЕНО: не сошлось %d проб из %d:"
+              % (len(provaleno), vsego))
         for imya in provaleno:
             print("      " + imya)
         return 1
-    print("  все %d образцов на месте" % len(PROBY))
+    print("  все %d проб сошлись" % vsego)
     return 0
 
 def main():
