@@ -410,7 +410,7 @@ def iter_files(mode, explicit):
         ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
 
 
-def _imena_ot_git(argumenty):
+def _imena_ot_git(argumenty, koren=None):
     """Имена файлов от git, разделённые нулевым байтом.
 
     Зачем -z. По умолчанию git ЭКРАНИРУЕТ имена вне ASCII и берёт их в кавычки:
@@ -429,11 +429,14 @@ def _imena_ot_git(argumenty):
     """
     out = subprocess.run(
         ["git"] + argumenty,
-        capture_output=True, text=True, encoding="utf-8", cwd=REPO,
+        capture_output=True, text=True, encoding="utf-8", cwd=koren or REPO,
     ).stdout
+    # Без .strip(): с -z git отдаёт имя ТОЧНО, и обрезка съела бы ведущий или
+    # хвостовой пробел — файл с таким именем не открылся бы и тихо выпал из
+    # проверки. Поймано 19.09.2026 пробой: «файлов 3, прочитано 2».
     for imya in out.split("\0"):
-        if imya.strip():
-            yield imya.strip()
+        if imya:
+            yield imya
 
 
 
@@ -761,7 +764,7 @@ PROBY_TIHIE_NAOBOROT = [
 
 
 def proba_imya_ne_ascii():
-    """Доходит ли до стража файл с именем вне ASCII.
+    """Доходит ли до стража файл с трудным именем: вне ASCII и с пробелом.
 
     Отдельной пробой, а не строкой в PROBY: те зовут check_file по уже готовому
     имени и проходят МИМО перечисления, а дефект сидел именно в нём. До 19.09
@@ -780,16 +783,30 @@ def proba_imya_ne_ascii():
         g("init", "-q", ".")
         g("config", "user.email", "proba@proba")
         g("config", "user.name", "proba")
-        for imya in ("latinskoe.py", "кириллическое.py"):
+        # Ведущий пробел в имени — отдельный случай: до 19.09 его съедала
+        # обрезка .strip(), и файл выпадал из проверки так же тихо, как
+        # кириллический.
+        for imya in ("latinskoe.py", "кириллическое.py", " probel-vperedi.py"):
             io.open(os.path.join(vremenny, imya), "w", encoding="utf-8").write(
                 'TOKEN = "' + kljuch + '"' + chr(10))
         g("add", "-A")
-        # Перечисление тем же способом, каким его делает страж.
-        out = g("diff", "--cached", "--name-only", "--diff-filter=ACM", "-z").stdout
-        imena = [i for i in out.split("\0") if i.strip()]
+        # Зовём БОЕВУЮ точку входа iter_files, а не git и не _imena_ot_git с
+        # выписанными руками аргументами. Иначе проба сторожит не тот путь,
+        # которым ходит страж: первая редакция спрашивала git напрямую и
+        # пропускала мутанта с .strip(), вторая задавала -z сама и пропускала
+        # мутанта, убравшего -z из боевого вызова. Оба поймано контролем
+        # 19.09.2026 — проба, не ловящая отката, хуже отсутствующей.
+        global REPO
+        prezhniy = REPO
+        REPO = vremenny
+        try:
+            imena = list(iter_files("staged", None))
+        finally:
+            REPO = prezhniy
         # Имя должно вернуться читаемым, а не в виде \320\272...
         ne_ascii = [i for i in imena if any(ord(c) > 127 for c in i)]
-        return len(imena) == 2 and len(ne_ascii) == 1
+        s_probelom = [i for i in imena if i.startswith(" ")]
+        return len(imena) == 3 and len(ne_ascii) == 1 and len(s_probelom) == 1
 
 
 def samoproverka():
@@ -844,10 +861,10 @@ def samoproverka():
 
     # Перечисление: доходит ли до стража файл с именем вне ASCII.
     doshlo = proba_imya_ne_ascii()
-    print("  %-38s %s" % ("имя вне ASCII в перечислении",
+    print("  %-38s %s" % ("трудное имя в перечислении",
                           "доходит" if doshlo else "НЕ ДОХОДИТ"))
     if not doshlo:
-        provaleno.append("имя вне ASCII (файл не попадает в обход)")
+        provaleno.append("трудное имя (файл не попадает в обход)")
 
     vsego = len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT) + 1
     print()
