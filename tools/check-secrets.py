@@ -400,24 +400,40 @@ def iter_files(mode, explicit):
             yield f
         return
     if mode == "staged":
-        out = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
-            capture_output=True, text=True, encoding="utf-8", cwd=REPO,
-        ).stdout
-        for line in out.splitlines():
-            if line.strip():
-                yield line.strip()
+        yield from _imena_ot_git(
+            ["diff", "--cached", "--name-only", "--diff-filter=ACM", "-z"])
         return
     # --all: только то, что git видит, — отслеживаемое плюс новое неигнорируемое.
     # Обход диска здесь не годится: он тащит игнорируемое (профили Chrome, bin, дампы)
     # и сторож тонет в шуме, из-за которого его выключают.
+    yield from _imena_ot_git(
+        ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
+
+
+def _imena_ot_git(argumenty):
+    """Имена файлов от git, разделённые нулевым байтом.
+
+    Зачем -z. По умолчанию git ЭКРАНИРУЕТ имена вне ASCII и берёт их в кавычки:
+    `"leads-recovery/\\320\\232\\320\\273..."`. Такое имя не открывается, файл
+    молча не читается и в счёт прочитанных не попадает — страж говорит «чисто»,
+    ни разу не заглянув внутрь.
+
+    Замерено 19.09.2026 на пробе из двух файлов с ОДНИМ И ТЕМ ЖЕ ключом:
+    `файлов 3, прочитано 2`, найден только латинский. Кириллический прошёл мимо.
+    Для нас это не теория: в направлениях лежат `Клики из ерп.xlsx` и `Лиды.txt`
+    с именами и телефонами.
+
+    `-z` сильнее, чем `core.quotePath=false`: тот снимает экранирование только
+    для не-ASCII, а имя с кавычкой или переводом строки git закавычит всё равно.
+    Нулевой байт не встречается в именах никогда.
+    """
     out = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+        ["git"] + argumenty,
         capture_output=True, text=True, encoding="utf-8", cwd=REPO,
     ).stdout
-    for line in out.splitlines():
-        if line.strip():
-            yield line.strip()
+    for imya in out.split("\0"):
+        if imya.strip():
+            yield imya.strip()
 
 
 
@@ -744,6 +760,38 @@ PROBY_TIHIE_NAOBOROT = [
 ]
 
 
+def proba_imya_ne_ascii():
+    """Доходит ли до стража файл с именем вне ASCII.
+
+    Отдельной пробой, а не строкой в PROBY: те зовут check_file по уже готовому
+    имени и проходят МИМО перечисления, а дефект сидел именно в нём. До 19.09
+    git отдавал такое имя экранированным, файл молча не открывался, и страж
+    отвечал «чисто», ни разу не заглянув внутрь.
+
+    Опыт ставится в своём временном репозитории: трогать рабочий нельзя, а без
+    git перечисление не воспроизвести.
+    """
+    import tempfile
+    kljuch = "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"
+    with tempfile.TemporaryDirectory() as vremenny:
+        def g(*a):
+            return subprocess.run(["git"] + list(a), cwd=vremenny,
+                                  capture_output=True, text=True)
+        g("init", "-q", ".")
+        g("config", "user.email", "proba@proba")
+        g("config", "user.name", "proba")
+        for imya in ("latinskoe.py", "кириллическое.py"):
+            io.open(os.path.join(vremenny, imya), "w", encoding="utf-8").write(
+                'TOKEN = "' + kljuch + '"' + chr(10))
+        g("add", "-A")
+        # Перечисление тем же способом, каким его делает страж.
+        out = g("diff", "--cached", "--name-only", "--diff-filter=ACM", "-z").stdout
+        imena = [i for i in out.split("\0") if i.strip()]
+        # Имя должно вернуться читаемым, а не в виде \320\272...
+        ne_ascii = [i for i in imena if any(ord(c) > 127 for c in i)]
+        return len(imena) == 2 and len(ne_ascii) == 1
+
+
 def samoproverka():
     """Каждый образец проверяется на им же построенной пробе."""
     print()
@@ -794,7 +842,14 @@ def samoproverka():
         if not vidit:
             provaleno.append(imya + " (исключение прорезало дыру)")
 
-    vsego = len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT)
+    # Перечисление: доходит ли до стража файл с именем вне ASCII.
+    doshlo = proba_imya_ne_ascii()
+    print("  %-38s %s" % ("имя вне ASCII в перечислении",
+                          "доходит" if doshlo else "НЕ ДОХОДИТ"))
+    if not doshlo:
+        provaleno.append("имя вне ASCII (файл не попадает в обход)")
+
+    vsego = len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT) + 1
     print()
     if provaleno:
         print("  ОСТАНОВЛЕНО: не сошлось %d проб из %d:"
