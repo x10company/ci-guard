@@ -21,6 +21,10 @@ on:
         description: "Версия gitleaks"
         type: string
         default: "8.21.2"
+      napravlenie:
+        description: "Это направление, а не репозиторий-инструмент"
+        type: boolean
+        default: true
       proveryat-js:
         description: "Прогонять ли node --check по файлам .js"
         type: boolean
@@ -43,6 +47,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Направление подключено
+        if: ${{ inputs.napravlenie }}
+        run: |
+          # Порядок подключения записан в своде, но свод не применяет себя
+          # сам: свежая сессия в пустом репозитории пишет код, а не
+          # обвешивает его проверками. Из семи направлений порядок прошёл
+          # сам ровно один. Напоминание лечит забывчивость прочитавшего,
+          # барьер — всех.
+          python .ci-guard/tools/proverit-podklyuchenie.py .
+
 
       - name: Самопроверка сторожа
         run: |

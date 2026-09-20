@@ -13,3 +13,5 @@ jobs:
     # with:
     #   gitleaks-config: .gitleaks.toml
     #   proveryat-js: false
+    #   napravlenie: false   # только для репозиториев-инструментов:
+    #                        # тогда не требуется CLAUDE.md с уровнем проверки
