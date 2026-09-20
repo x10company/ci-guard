@@ -13,5 +13,7 @@ jobs:
   guard:
     uses: ./.github/workflows/guard.yml
     with:
+      # Репозиторий-инструмент, не направление.
+      napravlenie: false
       # Кода на JS тут нет — только сторож на Python.
       proveryat-js: false
