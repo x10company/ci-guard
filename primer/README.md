@@ -29,7 +29,13 @@ irm https://raw.githubusercontent.com/x10company/ci-guard/main/primer/postavit.p
 Мак и линукс:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/x10company/ci-guard/main/primer/postavit.sh | bash
+B=https://raw.githubusercontent.com/x10company/ci-guard/main/primer
+mkdir -p .github/workflows .claude
+for p in "guard.yml:.github/workflows/guard.yml"          "settings.json:.claude/settings.json"          "gitleaks.toml:.gitleaks.toml"          "gitignore:.gitignore"; do
+  src=${p%%:*}; dst=${p#*:}
+  [ -e "$dst" ] && { echo "= $dst уже есть"; continue; }
+  curl -sSLf -o "$dst" "$B/$src" && echo "+ $dst"
+done
 ```
 
 Скачает и разложит все четыре файла. Существующие не трогает — сообщит и
