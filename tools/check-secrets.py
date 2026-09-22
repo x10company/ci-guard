@@ -487,7 +487,7 @@ def klyuchi_v_dereve(findings):
     22.08.2026: строка `*_key` в .gitignore закрыла их от коммита в первый же
     день — и в тот же день сделала невидимыми для проверки. В коммит они не
     уедут, а вот в архив, в копию каталога или в чужие руки вместе с папкой —
-    уедут. Ключ должен лежать в C:\secrets, а в репозитории не лежать вовсе.
+    уедут. Ключ должен лежать в C:\\secrets, а в репозитории не лежать вовсе.
 
     Поэтому здесь ходим по диску и смотрим только на первую строку файла:
     заголовок приватного ключа. Правило намеренно узкое — библиотеки, где слово
@@ -510,7 +510,7 @@ def klyuchi_v_dereve(findings):
             if pervaya.startswith(KLYUCH_ZAGOLOVOK) and "PRIVATE KEY" in pervaya:
                 rel = os.path.relpath(polnyy, REPO).replace("\\", "/")
                 findings.append((rel, 1, "приватный ключ лежит в дереве",
-                                 "даже в .gitignore он остаётся на диске: место ключа — C:\secrets"))
+                                 "даже в .gitignore он остаётся на диске: место ключа — C:\\secrets"))
                 continue
             rel = os.path.relpath(polnyy, REPO).replace("\\", "/")
             if TEMPLATE.search(rel):
