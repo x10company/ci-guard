@@ -20,34 +20,61 @@ claude plugin install x10-obshchie@x10company
 
 ## Одной командой
 
-Из корня нового репозитория. Windows:
-
-```powershell
-irm https://raw.githubusercontent.com/x10company/ci-guard/main/primer/postavit.ps1 | iex
-```
+Из корня нового репозитория. Скачивают четыре файла и раскладывают; трубы
+(`curl | bash`, `irm | iex`) здесь нет намеренно — она исполняет то, что лежит
+по адресу в эту секунду, а набор статический.
 
 Мак и линукс:
 
 ```bash
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "не репозиторий"; exit 1; }
 B=https://raw.githubusercontent.com/x10company/ci-guard/main/primer
 mkdir -p .github/workflows .claude
-for p in "guard.yml:.github/workflows/guard.yml"          "settings.json:.claude/settings.json"          "gitleaks.toml:.gitleaks.toml"          "gitignore:.gitignore"; do
+for p in "guard.yml:.github/workflows/guard.yml" \
+         "settings.json:.claude/settings.json" \
+         "gitleaks.toml:.gitleaks.toml" \
+         "gitignore:.gitignore"; do
   src=${p%%:*}; dst=${p#*:}
   [ -e "$dst" ] && { echo "= $dst уже есть"; continue; }
-  curl -sSLf -o "$dst" "$B/$src" && echo "+ $dst"
+  curl -sSLf -o "$dst" "$B/$src" && echo "+ $dst" || echo "! $dst не скачался"
 done
+[ "$(git symbolic-ref --short HEAD)" = main ] \
+  || echo "ВНИМАНИЕ: ветка не main — push-триггер guard.yml не сработает"
 ```
 
-Скачает и разложит все четыре файла. Существующие не трогает — сообщит и
-пропустит. Вне репозитория откажется работать.
+Windows:
+
+```powershell
+if (-not (Test-Path .git)) { throw "не корень репозитория" }
+$B = 'https://raw.githubusercontent.com/x10company/ci-guard/main/primer'
+New-Item -ItemType Directory -Force .github\workflows, .claude | Out-Null
+$nabor = [ordered]@{
+  'guard.yml'     = '.github\workflows\guard.yml'
+  'settings.json' = '.claude\settings.json'
+  'gitleaks.toml' = '.gitleaks.toml'
+  'gitignore'     = '.gitignore'
+}
+foreach ($e in $nabor.GetEnumerator()) {
+  if (Test-Path $e.Value) { "= $($e.Value) уже есть"; continue }
+  try   { Invoke-WebRequest "$B/$($e.Key)" -OutFile $e.Value -UseBasicParsing; "+ $($e.Value)" }
+  catch { "! $($e.Value) не скачался" }
+}
+if ((git symbolic-ref --short HEAD) -ne 'main') {
+  "ВНИМАНИЕ: ветка не main — push-триггер guard.yml не сработает" }
+```
+
+Существующие файлы не трогают — сообщают и пропускают. Вне репозитория
+отказываются работать. Предупреждают, если ветка не `main`: push-триггер
+`guard.yml` стоит на `main`.
 
 **`.gitignore` и `.gitleaks.toml` не заменяются даже с `--perezapisat`.** Эти
 два файла у каждого проекта свои, и подмена их нашими открывает то, что они
 закрывали: 04.09.2026 перезапись `.gitignore` расчехлила пять фикстур с
 настоящими ключами подписки. Остальное при `--perezapisat` перезаписывается, но
-прежний файл сохраняется рядом как `*.bak-<время>`.
+прежний файл сохраняется рядом как `*.bak-<время>`. Это умеет `postavit.sh`
+(и близнец `postavit.ps1`), который запускают локально для ОБНОВЛЕНИЯ набора в
+уже живом репозитории — не для нового.
 
-Предупредит, если ветка не `main`: push-триггер `guard.yml` стоит на `main`.
 На pull request проход пойдёт в любом случае — фильтра ветки там нет, — но
 прямые коммиты в другую ветку проверяться не будут. У нас из-за этого
 проход не запускался ни разу: там работали без pull request.
