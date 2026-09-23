@@ -42,6 +42,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: x10company/ci-guard
+          # Той же версии, что и сам проход. Без ref сторож приезжал из main, и
+          # метка закрепляла только файл прохода: хук перед коммитом брал сторожа
+          # по метке, а CI — из main, и после первой же правки они начинали
+          # проверять разным. Нашло направление automation 23.09.2026 по строке
+          # refs/heads/main в журнале прогона.
+          ref: ${{ github.job_workflow_sha }}
           path: .ci-guard
 
       - uses: actions/setup-python@v5
