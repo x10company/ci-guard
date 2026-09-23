@@ -1,0 +1,38 @@
+name: метка согласна с литералом
+
+# Порядок выпуска держался на памяти: «поменяй storozh-ref, потом ставь метку».
+# Забыть можно, и отказ был бы тихим: репозиторий зовёт проход v1.0.4, проход
+# выкачивает сторожа v1.0.3, проверка приезда пишет «метка v1.0.3 подтверждена»
+# и зеленеет — она сверяет приехавшее с ЗАКАЗАННЫМ, а заказан старый литерал.
+#
+# Нашло направление automation 23.09.2026. Здесь память заменена барьером.
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  sverka:
+    name: литерал в guard.yml равен имени метки
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Сверить
+        run: |
+          python - "$GITHUB_REF_NAME" <<'KONEC'
+          import io, re, sys
+          metka = sys.argv[1]
+          t = io.open('.github/workflows/guard.yml', encoding='utf-8').read()
+          m = re.search(r"storozh-ref:.*?default:\s*'([^']+)'", t, re.S)
+          if not m:
+              print("::error::в guard.yml не найден default у storozh-ref")
+              raise SystemExit(1)
+          literal = m.group(1)
+          print("метка %s, литерал %s" % (metka, literal))
+          if literal != metka:
+              print("::error::метка %s, а сторож заказан %s — выпуск развёл бы "
+                    "хук и проход молча" % (metka, literal))
+              raise SystemExit(1)
+          print("совпадают")
+          KONEC

@@ -39,7 +39,7 @@ on:
           нет вовсе, а fetch идёт по +refs/heads/main. Выпуская новую метку,
           меняют эту строку ПЕРЕД тем, как метку поставить.
         type: string
-        default: 'v1.0.3'
+        default: 'v1.0.4'
 
 jobs:
   klyuchi:
@@ -82,6 +82,39 @@ jobs:
             ;;
             *) echo "сторож: версия задана не меткой ($zakazano) — так зовёт себя сам ci-guard" ;;
           esac
+
+      - name: Хук вызывающего той же версии, что и проход
+        run: |
+          # dependabot двигает только пришпиленное в файлах действий: он
+          # пришлёт пул-реквест с guard.yml@vX, а rev: в .pre-commit-config.yaml
+          # не тронет. Проверки у такого пул-реквеста зелёные, после слияния CI
+          # на vX, а хук на прежней — расходящаяся пара, только с другого конца.
+          # Нашло направление automation 23.09.2026; дисциплина заменена
+          # барьером: такой пул-реквест придёт красным.
+          zakazano="${{ inputs.storozh-ref }}"
+          case "$zakazano" in
+            v[0-9]*) ;;
+            *) echo "хук: версия задана не меткой — сверять не с чем"; exit 0 ;;
+          esac
+          [ -f .pre-commit-config.yaml ] || {
+            echo "хук: конфига нет — у репозитория свои хуки, сверять нечего"; exit 0; }
+          python - "$zakazano" <<'KONEC'
+          import io, re, sys
+          zakazano = sys.argv[1]
+          t = io.open(".pre-commit-config.yaml", encoding="utf-8").read()
+          # Ищем rev именно у нашего репозитория: в конфиге бывают и чужие хуки.
+          m = re.search(r"repo:\s*https://github\.com/x10company/ci-guard\s+rev:\s*(\S+)", t)
+          if not m:
+              print("хук: блока x10company/ci-guard в конфиге нет")
+              raise SystemExit(0)
+          rev = m.group(1)
+          print("хук: %s, проход: %s" % (rev, zakazano))
+          if rev != zakazano:
+              print("::error::хук на %s, а проход на %s — разойдутся молча; "
+                    "поднимите rev тем же изменением" % (rev, zakazano))
+              raise SystemExit(1)
+          print("хук и проход одной версии")
+          KONEC
 
       - uses: actions/setup-python@v5
         with:
