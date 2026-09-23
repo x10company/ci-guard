@@ -30,6 +30,17 @@ on:
         type: boolean
         default: true
 
+      storozh-ref:
+        description: >-
+          Версия сторожа. По умолчанию — метка этого выпуска, буквой, а не
+          выражением: ${{ github.job_workflow_sha }} внутри переиспользуемого
+          прохода вычисляется в ПУСТОТУ, и checkout молча берёт ветку по
+          умолчанию. Замерено 23.09.2026: во входных данных шага строки ref
+          нет вовсе, а fetch идёт по +refs/heads/main. Выпуская новую метку,
+          меняют эту строку ПЕРЕД тем, как метку поставить.
+        type: string
+        default: 'v1.0.2'
+
 jobs:
   klyuchi:
     name: ключи и абсолютные пути
@@ -47,8 +58,30 @@ jobs:
           # по метке, а CI — из main, и после первой же правки они начинали
           # проверять разным. Нашло направление automation 23.09.2026 по строке
           # refs/heads/main в журнале прогона.
-          ref: ${{ github.job_workflow_sha }}
+          ref: ${{ inputs.storozh-ref }}
           path: .ci-guard
+
+      - name: Сторож приехал той версии, что заказана
+        run: |
+          # Барьер, не нашедший своего инструмента, обязан отказать, а не
+          # пропустить: свод proverki. Здесь то же — если сторож приехал не
+          # той версии, молчать нельзя, иначе хук и проход снова разойдутся.
+          zakazano="${{ inputs.storozh-ref }}"
+          priehalo="$(git -C .ci-guard rev-parse HEAD)"
+          echo "сторож: заказано $zakazano, приехало $priehalo"
+          [ -f .ci-guard/tools/check-secrets.py ] || {
+            echo "::error::сторожа нет в .ci-guard — проверка невозможна"; exit 1; }
+          # Заказана метка (v1.2.3) — проверяем, что HEAD на ней и стоит.
+          case "$zakazano" in
+            v[0-9]*)
+              po_metke="$(git -C .ci-guard rev-parse "refs/tags/$zakazano^{commit}" 2>/dev/null || true)"
+              [ -n "$po_metke" ] && [ "$po_metke" = "$priehalo" ] || {
+                echo "::error::заказана метка $zakazano, а приехал $priehalo — сторож не той версии"
+                exit 1; }
+              echo "сторож: метка $zakazano подтверждена"
+            ;;
+            *) echo "сторож: версия задана не меткой ($zakazano) — так зовёт себя сам ci-guard" ;;
+          esac
 
       - uses: actions/setup-python@v5
         with:
