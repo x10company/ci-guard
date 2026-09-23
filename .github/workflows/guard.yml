@@ -39,7 +39,7 @@ on:
           нет вовсе, а fetch идёт по +refs/heads/main. Выпуская новую метку,
           меняют эту строку ПЕРЕД тем, как метку поставить.
         type: string
-        default: 'v1.0.2'
+        default: 'v1.0.3'
 
 jobs:
   klyuchi:
