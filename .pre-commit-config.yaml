@@ -10,6 +10,6 @@ default_install_hook_types: [pre-commit, pre-merge-commit]
 
 repos:
   - repo: https://github.com/x10company/ci-guard
-    rev: v1.0.3
+    rev: v1.0.4
     hooks:
       - id: check-secrets
