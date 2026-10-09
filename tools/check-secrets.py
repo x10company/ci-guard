@@ -246,6 +246,47 @@ KOD_ILI_ZAGLUSHKA = re.compile("[" + re.escape("{}()[]$<>|/" + chr(92) + chr(96)
 PODPIS_RU = re.compile(
     r"(?i)(?:парол|ключ|токен|секрет)[^:\n]{0,24}:\s*\**\s*(?P<val>[^\s*][^\s]{15,})")
 
+# Пароль в командной строке клиента MySQL/MariaDB: `mysql -u имя -p'пароль'`.
+#
+# Зачем отдельным правилом. 08.10.2026 в одном из репозиториев организации
+# боевой пароль базы пролежал в документах в четырёх командах такого вида, и
+# страж отвечал «чисто» — как и gitleaks в проходе. Мимо прошли все правила
+# разом, каждое по своей причине: имени слева нет (у ключа -p его не бывает);
+# значение — 32 hex без заглавных, и pohozhe_na_klyuch ключом его не считает;
+# а будь в той же строке `$HOST`, ALLOW погасил бы её целиком.
+#
+# Пароль у -p пишется слитно: -pЗНАЧЕНИЕ, -p'…', -p"…". С пробелом (`-p база`)
+# клиент спрашивает пароль сам, а слово после пробела — имя базы, поэтому
+# такую форму не ловим. То же с --password=ЗНАЧЕНИЕ: `--password значение`
+# клиент тоже читает как «спроси пароль».
+#
+# Проверяется ДО ALLOW, а подстановку в самом значении — -p"$PASS", -p${PASS},
+# -p%PASS% — отсекаем по значению, а не по строке. Заглушки (-pPASSWORD,
+# -p'пароль', -p'***') и короткое (-print0 после mysql в той же строке даёт
+# «rint0») находкой не считаются.
+MYSQL_KOMANDA = re.compile(
+    r"(?<![\w-])(?:mysql|mysqldump|mysqladmin|mysqlcheck|mysqlimport|mysqlshow"
+    r"|mariadb|mariadb-dump|mariadb-admin|mariadb-check|mariadb-import)\b")
+MYSQL_KLYUCH = re.compile(
+    r"""\s(?:-p|--password=)(?:'(?P<v1>[^'\n]*)'|"(?P<v2>[^"\n]*)"|(?P<v3>[^\s'"`;|&()<>]+))""")
+MYSQL_ZAGLUSHKA = re.compile(
+    r"(?i)^(?:[*x.]+|pass(?:word|wd)?|pwd|secret|пароль|changeme|your\w*|\w*example\w*)$")
+
+
+def mysql_parol(line):
+    """Пароль, записанный в команде mysql/mariadb, или None."""
+    k = MYSQL_KOMANDA.search(line)
+    if not k:
+        return None
+    for m in MYSQL_KLYUCH.finditer(line, k.end()):
+        val = m.group("v1") or m.group("v2") or m.group("v3") or ""
+        if len(val) < 6 or re.search(r"[$%{}<>*`…]|\.\.\.", val):
+            continue
+        if MYSQL_ZAGLUSHKA.match(val):
+            continue
+        return val
+    return None
+
 # Файл, который целиком является секретом: имя намекает, внутри одна строка.
 # Так у нас лежал BackUps/ERP/.ssh_password — ни имени переменной, ни `=`,
 # зацепиться не за что, и страж честно отвечал «чисто».
@@ -626,6 +667,13 @@ def check_file(rel, findings, prochitano=None):
             findings.append((rel, n, "запасное значение у " + mi.group("name"),
                              mi.group("val")[:6] + "…"))
 
+        # Пароль в команде mysql — тоже до ALLOW: тот гасит строку с любой
+        # `$ПЕРЕМЕННОЙ` целиком (см. MYSQL_KOMANDA). Показываем три знака, а не
+        # шесть: пароль бывает коротким, и шесть знаков выдали бы его почти весь.
+        parol = None if svoy else mysql_parol(line)
+        if parol:
+            findings.append((rel, n, "пароль в команде mysql", parol[:3] + "…"))
+
         if is_allowed(line):
             continue
         for label, pat in PATTERNS:
@@ -734,6 +782,16 @@ PROBY = [
     ("логин с паролем в адресе", "_proba.py",
      "    '" + "socks5://" + "GbIpV6x" + ":" + "Lk4wQ2eR7tY9uI1o" + "@"
      + "proxy.vendor.net:10949" + "',"),
+    # Пароль у ключа -p клиента MySQL — ровно так он и лежал 08.10.2026:
+    # 32 hex без заглавных и без имени слева. Вторая проба — с `$ПЕРЕМЕННОЙ`
+    # в той же строке: ALLOW гасит такую строку целиком, и проба ловит откат
+    # правила за ALLOW. Третья — длинная форма ключа.
+    ("пароль в mysql -p", "_proba.md",
+     "podman exec db " + "mysql" + " -u app -p'" + "9f2c4e7a1b8d0f63" * 2 + "' shop"),
+    ("пароль в mysql рядом с $", "_proba.sh",
+     "mysql" + "dump -h $DB_HOST -u root -p" + "Lk4wQ2eR7tY9" + " shop"),
+    ("пароль в mysql --password=", "_proba.sh",
+     "mariadb" + "-admin -u root --password=" + "Lk4wQ2eR7tY9" + " status"),
 ]
 
 
@@ -760,6 +818,20 @@ PROBY_TIHIE = [
 PROBY_TIHIE_NAOBOROT = [
     ("случайный ключ рядом с исключением", "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
     ("op без трёх частей", "op://" + "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
+]
+
+# Команды mysql, на которых правило «пароль в команде mysql» обязано молчать:
+# пароля в строке нет, а форма похожа. Каждая — случай, который правило
+# могло бы поймать зря, и тогда его выключили бы первым.
+PROBY_MYSQL_TIHIE = [
+    ("mysql: пароль спросит сам", "mysql -u app -p shop"),
+    ("mysql: пароль из переменной", 'mysqldump -u app -p"$DB_PASS" shop'),
+    ("mysql: подстановка без кавычек", "mysql -u app -p${DB_PASS} shop"),
+    ("mysql: заглушка", "mysql -u root -pPASSWORD shop"),
+    ("mysql: заглушка по-русски", "mysql -u root -p'" + chr(1087) + "ароль' shop"),
+    ("mysql: порт большой P", "mysql -h db -P 3306 -u app -p shop"),
+    ("mysql и find -print0", "mysql -u app -p shop | find . -print0"),
+    ("ssh -p без mysql", "ssh -p 7777 root@host hostname"),
 ]
 
 
@@ -858,6 +930,11 @@ def samoproverka():
         print("  %-38s %s" % (imya, "видит" if vidit else "НЕ ВИДИТ"))
         if not vidit:
             provaleno.append(imya + " (исключение прорезало дыру)")
+    for imya, stroka in PROBY_MYSQL_TIHIE:
+        molchit = mysql_parol(stroka) is None
+        print("  %-38s %s" % (imya, "молчит" if molchit else "РУГАЕТСЯ ЗРЯ"))
+        if not molchit:
+            provaleno.append(imya + " (ругается зря)")
 
     # Перечисление: доходит ли до стража файл с именем вне ASCII.
     doshlo = proba_imya_ne_ascii()
@@ -866,7 +943,8 @@ def samoproverka():
     if not doshlo:
         provaleno.append("трудное имя (файл не попадает в обход)")
 
-    vsego = len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT) + 1
+    vsego = (len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT)
+             + len(PROBY_MYSQL_TIHIE) + 1)
     print()
     if provaleno:
         print("  ОСТАНОВЛЕНО: не сошлось %d проб из %d:"
