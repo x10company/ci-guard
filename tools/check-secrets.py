@@ -246,6 +246,115 @@ KOD_ILI_ZAGLUSHKA = re.compile("[" + re.escape("{}()[]$<>|/" + chr(92) + chr(96)
 PODPIS_RU = re.compile(
     r"(?i)(?:парол|ключ|токен|секрет)[^:\n]{0,24}:\s*\**\s*(?P<val>[^\s*][^\s]{15,})")
 
+# Пароль в командной строке клиента MySQL/MariaDB: `mysql -u имя -p'пароль'`.
+#
+# Зачем отдельным правилом. 08.10.2026 в одном из репозиториев организации
+# боевой пароль базы пролежал в документах в четырёх командах такого вида, и
+# страж отвечал «чисто» — как и gitleaks в проходе. Мимо прошли все правила
+# разом, каждое по своей причине: имени слева нет (у ключа -p его не бывает);
+# значение — 32 hex без заглавных, и pohozhe_na_klyuch ключом его не считает;
+# а будь в той же строке `$HOST`, ALLOW погасил бы её целиком.
+#
+# Пароль у -p пишется слитно: -pЗНАЧЕНИЕ, -p'…', -p"…". С пробелом (`-p база`)
+# клиент спрашивает пароль сам, а слово после пробела — имя базы, поэтому
+# такую форму не ловим. То же с --password=ЗНАЧЕНИЕ: `--password значение`
+# клиент тоже читает как «спроси пароль».
+#
+# Проверяется ДО ALLOW, а подстановку отсекаем по самому значению, а не по
+# строке. Подстановкой считаем только то, что ею и является: переменную
+# оболочки ($X, ${X}, $(…) — в том числе незакрытые: значение в кавычках
+# обрывается на первой внутренней кавычке, и от -p"$(cat "$F")" остаётся
+# «$(cat »), PowerShell ($env:X), cmd (%X%), Python (%(x)s), шаблон строки
+# ({x}, {x!r}, {x:s}), заглушку в угловых скобках (<пароль>), обратные
+# кавычки. Отдельный знак — `*`, `%`, `<` — подстановкой НЕ считаем: так
+# пишутся настоящие пароли, а первая редакция правила, отсекавшая значение с
+# любым из этих знаков, пропускала 40–80% паролей со спецзнаками (замер
+# тестировщика, 09.10.2026). `$` после буквы или цифры (Xk7$mQ) — часть пароля
+# в одинарных кавычках, где оболочка его не раскрывает, и подстановка в
+# двойных кавычках и без кавычек, где раскрывает.
+#
+# Заглушкой считаем значение без единой цифры, где есть слово-заглушка ЦЕЛЫМ
+# словом (русские — основой: пароля, секретный): -pPASSWORD, -p'пароль',
+# -pЗНАЧЕНИЕ, -pNEW_PASSWORD, -p[password], -p'MySecurePassword'. Подстрокой
+# искать нельзя: тогда фраза-пароль compass-river-tango молчала бы из-за «pass»
+# внутри слова. Password2024 с цифрой находкой остаётся. Исключение для цифры —
+# фраза с пробелом и словом-заглушкой: -p'Пароль от базы — в 1Password' — это
+# пояснение, а не пароль.
+#
+# Склейка строк в коде — не пароль: значение в кавычках, начатое с пробела
+# (" -p" + pw + " "), или с оператором склейки у кавычки
+# (-p'" . $password . "'). Пароль короче 6 знаков не ловим: тогда -print0
+# после mysql в той же строке дал бы «rint0».
+#
+# Чего правило не видит:
+# - клиент mycli (у него `-p значение` через пробел — и есть пароль), перенос
+#   строки `\` перед -p, -p\"…\" внутри bash -c "…", MYSQL_PWD=, --pass=,
+#   `mysqladmin password 'X'`, пароль из строковых литералов, склеенных с -p
+#   (`'-p' + 'пароль'`), пароль короче 6 знаков;
+# - пароль, где подстановкой выглядит сама его часть: `$` в начале или после
+#   знака, <…>, {…}, %…%, !…! внутри, пробел в начале, «...». Замер
+#   09.10.2026, 20 000 случайных паролей длиной 12–20 со всеми знаками
+#   препинания: мимо 0,5–1,2%.
+# Где шумит: путь с mysql в той же строке перед ключом на -p
+# (`/usr/include/mysql -pedantic`, `/var/lib/mysql -preserve`).
+MYSQL_KOMANDA = re.compile(
+    r"(?<![\w-])(?:mysql|mysqldump|mysqladmin|mysqlcheck|mysqlimport|mysqlshow"
+    r"|mysqlbinlog|mysqlpump|mysqlslap|mysql_upgrade|mysqlsh|mariabackup|xtrabackup"
+    r"|mariadb|mariadb-dump|mariadb-admin|mariadb-check|mariadb-import|mariadb-backup)\b")
+# Перед ключом — пробел или начало элемента списка аргументов: ["mysqldump", "-pX"].
+MYSQL_KLYUCH = re.compile(
+    r"""(?:(?<=\s)|(?<=["'\[,(]))(?:-p|--password=)"""
+    r"""(?:'(?P<v1>[^'\n]*)'|"(?P<v2>[^"\n]*)"|(?P<v3>[^\s'"`;|&()<>]+))""")
+_MYSQL_PODST = (
+    r"\$\{[^}\n]*\}?|\$\([^)\n]*\)?|\$env:\w+|%[A-Za-z_]\w*%|![A-Za-z_]\w*!|%\([A-Za-z_]\w*\)[sdrfi]"
+    r"|\{[A-Za-z_][\w.\[\]'\"]*(?:![rsa])?(?::[^}\n]*)?\}|<[^<>\n]*>|`[^`\n]*`|`[A-Za-z][\w./-]*\s")
+# В одинарных кавычках `$` после буквы или цифры — часть пароля, иначе — подстановка.
+MYSQL_PODSTANOVKA_ODINARNYE = re.compile(_MYSQL_PODST + r"|(?<![A-Za-z0-9])\$[A-Za-z_]\w*")
+MYSQL_PODSTANOVKA = re.compile(_MYSQL_PODST + r"|\$[A-Za-z_]\w*")
+# Склейка строк в коде: кавычка рядом с оператором склейки (" . $x . ", ' + x + ').
+MYSQL_SKLEJKA = re.compile(r"""["']\s*[.+]\s|\s[.+]\s*["']""")
+MYSQL_ZAGLUSHKA_SLOVA = {
+    "pass", "password", "passwd", "pwd", "value", "secret", "placeholder", "dummy",
+    "sample", "example", "changeme"}
+# Русские — основой: слово меняет окончание (пароля, секретный, значения).
+MYSQL_ZAGLUSHKA_OSNOVY = ("парол", "значени", "секрет")
+
+
+def mysql_zaglushka(val):
+    if re.fullmatch(r"(?i)[*x.\s]+", val):
+        return True
+    # Слова: по разделителям и по смене регистра (MySecurePassword → My Secure Password).
+    slova = [s.lower() for s in re.findall(r"[A-ZА-ЯЁ]?[a-zа-яё]+|[A-ZА-ЯЁ]+(?![a-zа-яё])", val)]
+    est = any(s in MYSQL_ZAGLUSHKA_SLOVA or s.startswith(MYSQL_ZAGLUSHKA_OSNOVY) for s in slova)
+    # Пояснение текстом вместо пароля: -p'Пароль от базы — в 1Password'. С
+    # пробелом внутри и со словом-заглушкой — это фраза, даже если в ней цифра.
+    if est and re.search(r"\s", val):
+        return True
+    return est and not re.search(r"[0-9]", val)
+
+
+def mysql_parol(line):
+    """Пароль, записанный в команде mysql/mariadb, или None."""
+    k = MYSQL_KOMANDA.search(line)
+    if not k:
+        return None
+    for m in MYSQL_KLYUCH.finditer(line, k.end()):
+        odinarnye = m.group("v1") is not None
+        if m.group("v3") is not None:
+            val = m.group("v3")
+        else:
+            val = m.group("v1") if odinarnye else m.group("v2")
+            if val[:1].isspace() or MYSQL_SKLEJKA.search(val):
+                continue
+        if "…" in val or "..." in val:
+            continue
+        podst = MYSQL_PODSTANOVKA_ODINARNYE if odinarnye else MYSQL_PODSTANOVKA
+        ostatok = podst.sub("", val)
+        if len(ostatok) < 6 or mysql_zaglushka(ostatok):
+            continue
+        return val
+    return None
+
 # Файл, который целиком является секретом: имя намекает, внутри одна строка.
 # Так у нас лежал BackUps/ERP/.ssh_password — ни имени переменной, ни `=`,
 # зацепиться не за что, и страж честно отвечал «чисто».
@@ -626,6 +735,13 @@ def check_file(rel, findings, prochitano=None):
             findings.append((rel, n, "запасное значение у " + mi.group("name"),
                              mi.group("val")[:6] + "…"))
 
+        # Пароль в команде mysql — тоже до ALLOW: тот гасит строку с любой
+        # `$ПЕРЕМЕННОЙ` целиком (см. MYSQL_KOMANDA). Показываем три знака, а не
+        # шесть: пароль бывает коротким, и шесть знаков выдали бы его почти весь.
+        parol = None if svoy else mysql_parol(line)
+        if parol:
+            findings.append((rel, n, "пароль в команде mysql", parol[:3] + "…"))
+
         if is_allowed(line):
             continue
         for label, pat in PATTERNS:
@@ -734,6 +850,35 @@ PROBY = [
     ("логин с паролем в адресе", "_proba.py",
      "    '" + "socks5://" + "GbIpV6x" + ":" + "Lk4wQ2eR7tY9uI1o" + "@"
      + "proxy.vendor.net:10949" + "',"),
+    # Пароль у ключа -p клиента MySQL — ровно так он и лежал 08.10.2026:
+    # 32 hex без заглавных и без имени слева. Вторая проба — с `$ПЕРЕМЕННОЙ`
+    # в той же строке: ALLOW гасит такую строку целиком, и проба ловит откат
+    # правила за ALLOW. Третья — длинная форма ключа.
+    ("пароль в mysql -p", "_proba.md",
+     "podman exec db " + "mysql" + " -u app -p'" + "9f2c4e7a1b8d0f63" * 2 + "' shop"),
+    ("пароль в mysql рядом с $", "_proba.sh",
+     "mysql" + "dump -h $DB_HOST -u root -p" + "Lk4wQ2eR7tY9" + " shop"),
+    ("пароль в mysql --password=", "_proba.sh",
+     "mariadb" + "-admin -u root --password=" + "Lk4wQ2eR7tY9" + " status"),
+    ('пароль в mysql -p"…"', "_proba.md",
+     "mysql" + ' -u app -p"' + "Lk4wQ2eR7tY9" + '" shop'),
+    # Спецзнаки внутри пароля — не подстановка: первая редакция правила
+    # отбрасывала такое значение целиком (09.10.2026).
+    ("пароль в mysql со спецзнаками", "_proba.md",
+     "mysql" + " -u app -p'" + "Xk7$mQ2*pL9%vR" + "' shop"),
+    # Пробы круга 2 (09.10.2026): каждая охраняет кусок, откат которого
+    # самопроверка прежде не замечала.
+    ("пароль в mysql: $ после цифры", "_proba.md",
+     "mysql" + " -u app -p'" + "Xk7$mQ2pL9vR" + "' shop"),
+    ("пароль в mysql: список аргументов", "_proba.py",
+     '["mysql' + 'dump", "-u", "app", "-p' + "Lk4wQ2eR7tY9" + '", "shop"]'),
+    ("пароль в mysqlbinlog", "_proba.sh",
+     "mysql" + "binlog -u root -p" + "Lk4wQ2eR7tY9" + " binlog.000001"),
+    # Слово-заглушка целиком, но с цифрой — пароль, а не заглушка.
+    ("пароль в mysql: Password с цифрой", "_proba.md",
+     "mysql" + " -u app -p'" + "Password2024" + "' shop"),
+    ("пароль в mysql: фраза без цифр", "_proba.md",
+     "mysql" + " -u app -p'" + "compass-river-tango-harbor" + "' shop"),
 ]
 
 
@@ -760,6 +905,54 @@ PROBY_TIHIE = [
 PROBY_TIHIE_NAOBOROT = [
     ("случайный ключ рядом с исключением", "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
     ("op без трёх частей", "op://" + "Q7wE2rT5yU8iO1pA3sD6fG9hJ2kL5zX8"),
+]
+
+# Команды mysql, на которых правило «пароль в команде mysql» обязано молчать:
+# пароля в строке нет, а форма похожа. Каждая — случай, который правило
+# могло бы поймать зря, и тогда его выключили бы первым.
+PROBY_MYSQL_TIHIE = [
+    # Имена переменных в пробах на подстановку — с цифрой и без слова-заглушки
+    # (DB_PW2, а не DB_PASS): иначе пробу гасил бы признак заглушки, и откат
+    # самого образца подстановки проходил бы незамеченным (мутанты 09.10.2026).
+    ("mysql: пароль спросит сам", "mysql -u app -p shop"),
+    ("mysql: пароль из переменной", 'mysqldump -u app -p"$DB_PASS" shop'),
+    ("mysql: подстановка без кавычек", "mysql -u app -p${DB_PW2} shop"),
+    ("mysql: ${X:-запас}", 'mysql -u app -p"${DB_PW2:-x}" shop'),
+    ("mysql: сокращённое значение …", "mysql -u app -p'9f2c4e7a" + chr(8230) + "0f63' shop"),
+    ("mysql: $X в кавычках", 'mysqldump -u app -p"$DB_PW2" shop'),
+    ("mysql: $(…) в кавычках", 'mysqldump -u app -p"$(cat /run/db-pw2)" shop'),
+    ("mysql: $env:X PowerShell", 'mysql.exe -u app -p"$env:DB_PW2" shop'),
+    ("mysql: <заглушка>", "mysql -u app -p'<db-pw-2>' shop"),
+    ("mysql: заглушка", "mysql -u root -pPASSWORD shop"),
+    ("mysql: заглушка по-русски", "mysql -u root -p'" + chr(1087) + "ароль' shop"),
+    ("mysql: порт большой P", "mysql -h db -P 3306 -u app -p shop"),
+    ("mysql и find -print0", "mysql -u app -p shop | find . -print0"),
+    ("ssh -p без mysql", "ssh -p 7777 root@host hostname"),
+    ("mysql: %X% в cmd", "mysql -u app -p%DB_PW2% shop"),
+    ("mysql: шаблон строки {x}", "f\"mysql -u app -p'{cfg.db_pw2}' shop\""),
+    ("mysql: склейка строк в коде",
+     'cmd = "mysqldump -u " + user + " -p" + pw + " " + db'),
+    ("mysql: обозначение -pЗНАЧЕНИЕ", "mysql -u app -pЗНАЧЕНИЕ, --password=ЗНАЧЕНИЕ"),
+    ("mysql: заглушка NEW_PASSWORD", "mysql -u root -pNEW_PASSWORD shop"),
+    ("mysql: заглушка MySecurePassword", "mysql -u root -p'MySecurePassword' shop"),
+    ("mysql: $(…) с кавычками внутри", 'mysql -u root -p"$(cat "$PW_FILE2")" shop'),
+    ("mysql: склейка в PHP", 'exec("mysqldump -u root -p\'" . $db_pw2 . "\' shop");'),
+    ("mysql: %(x)s в Python", "\"mysql -u app -p'%(db_pw2)s' shop\" % cfg"),
+    ("mysql: {x!r}", "f\"mysql -u app -p{db_pw2!r} shop\""),
+    ("mysql: $X после букв в двойных", 'mysql -u app -p"pre$DB_PW2" shop'),
+    ("mysql: обратные кавычки", 'mysql -u app -p"`cat /run/db-pw2`" shop'),
+    # Незакрытая — только перед командой: значение обрывается на внутренней
+    # кавычке. Одиночная обратная кавычка в пароле подстановкой не считается.
+    ("mysql: `cmd \"…\"` незакрытая", 'mysql -u app -p"`getsecret2 --db "$DB"`" shop'),
+    ("mysql: три точки", "mysql -u app -p'9f2c4e7a...0f63' shop"),
+    ("mysql: xxxxxxxx", "mysql -u app -p'xxxxxxxx' shop"),
+    # ${…} с кавычкой внутри: значение обрывается на ней, и закрывающей «}» нет.
+    ("mysql: ${X:-\"…\"} незакрытая", 'mysql -u app -p"${DB_PW2:-"x"}" shop'),
+    # Цифра только внутри подстановки: заглушку решает остаток, а не всё значение.
+    ("mysql: заглушка после подстановки", 'mysql -u app -p"${DB2}_PASSWORD_HERE" shop'),
+    ("mysql: !X! в cmd", "set CMD=mysql -u app -p!DB_PW2! shop"),
+    ("mysql: заглушка «секретный»", "mysql -u root -p'" + chr(1089) + "екретный' shop"),
+    ("mysql: пояснение вместо пароля", "mysql -u root -p'" + chr(1055) + "ароль от базы — в 1Password' shop"),
 ]
 
 
@@ -815,10 +1008,15 @@ def samoproverka():
     print("  Самопроверка стража")
     print("  " + "-" * 56)
     provaleno = []
+    # Счёт выполненных проб, а не длин списков: «все N проб сошлись» печаталось
+    # бы и тогда, когда целый цикл проб выпал из прогона (мутант тестировщика,
+    # 09.10.2026 — снятый цикл PROBY_MYSQL_TIHIE давал зелёный).
+    provereno = 0
     # У каждой пробы своё имя. С общим именем проверка мигала: удаление файла
     # на Windows под антивирусом происходит не сразу, и следующая проба не могла
     # занять то же имя — PermissionError валил весь прогон примерно раз из шести.
     for nomer, (imya, fayl, soderzhimoe) in enumerate(PROBY, 1):
+        provereno += 1
         koren_imeni, rasshirenie = os.path.splitext(fayl)
         fayl = "%s%d%s" % (koren_imeni, nomer, rasshirenie)
         polnyy = os.path.join(REPO, fayl)
@@ -849,24 +1047,36 @@ def samoproverka():
     # мешать нормальным файлам.
     print()
     for imya, val in PROBY_TIHIE:
+        provereno += 1
         molchit = not pohozhe_na_klyuch(val)
         print("  %-38s %s" % (imya, "молчит" if molchit else "РУГАЕТСЯ ЗРЯ"))
         if not molchit:
             provaleno.append(imya + " (ругается зря)")
     for imya, val in PROBY_TIHIE_NAOBOROT:
+        provereno += 1
         vidit = pohozhe_na_klyuch(val)
         print("  %-38s %s" % (imya, "видит" if vidit else "НЕ ВИДИТ"))
         if not vidit:
             provaleno.append(imya + " (исключение прорезало дыру)")
+    for imya, stroka in PROBY_MYSQL_TIHIE:
+        provereno += 1
+        molchit = mysql_parol(stroka) is None
+        print("  %-38s %s" % (imya, "молчит" if molchit else "РУГАЕТСЯ ЗРЯ"))
+        if not molchit:
+            provaleno.append(imya + " (ругается зря)")
 
     # Перечисление: доходит ли до стража файл с именем вне ASCII.
     doshlo = proba_imya_ne_ascii()
+    provereno += 1
     print("  %-38s %s" % ("трудное имя в перечислении",
                           "доходит" if doshlo else "НЕ ДОХОДИТ"))
     if not doshlo:
         provaleno.append("трудное имя (файл не попадает в обход)")
 
-    vsego = len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT) + 1
+    vsego = (len(PROBY) + len(PROBY_TIHIE) + len(PROBY_TIHIE_NAOBOROT)
+             + len(PROBY_MYSQL_TIHIE) + 1)
+    if provereno != vsego:
+        provaleno.append("выполнено проб %d из %d — часть выпала из прогона" % (provereno, vsego))
     print()
     if provaleno:
         print("  ОСТАНОВЛЕНО: не сошлось %d проб из %d:"
