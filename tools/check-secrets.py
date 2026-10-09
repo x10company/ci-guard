@@ -297,10 +297,15 @@ PODPIS_RU = re.compile(
 #   препинания: мимо 0,5–1,2%.
 # Где шумит: путь с mysql в той же строке перед ключом на -p
 # (`/usr/include/mysql -pedantic`, `/var/lib/mysql -preserve`).
+#
+# Слово, продолженное дефисом (mysql-client, mysql-server, имя правила
+# mysql-parol-v-komande), командой не считается: 09.10.2026 v1.0.5 не пустила
+# в журнал проверки строку «правило mysql-parol-v-komande … -pedantic/-preserve».
+# mariadb-dump и другие утилиты с дефисом перечислены отдельно и ловятся.
 MYSQL_KOMANDA = re.compile(
     r"(?<![\w-])(?:mysql|mysqldump|mysqladmin|mysqlcheck|mysqlimport|mysqlshow"
     r"|mysqlbinlog|mysqlpump|mysqlslap|mysql_upgrade|mysqlsh|mariabackup|xtrabackup"
-    r"|mariadb|mariadb-dump|mariadb-admin|mariadb-check|mariadb-import|mariadb-backup)\b")
+    r"|mariadb|mariadb-dump|mariadb-admin|mariadb-check|mariadb-import|mariadb-backup)(?![\w-])")
 # Перед ключом — пробел или начало элемента списка аргументов: ["mysqldump", "-pX"].
 MYSQL_KLYUCH = re.compile(
     r"""(?:(?<=\s)|(?<=["'\[,(]))(?:-p|--password=)"""
@@ -952,6 +957,7 @@ PROBY_MYSQL_TIHIE = [
     ("mysql: заглушка после подстановки", 'mysql -u app -p"${DB2}_PASSWORD_HERE" shop'),
     ("mysql: !X! в cmd", "set CMD=mysql -u app -p!DB_PW2! shop"),
     ("mysql: заглушка «секретный»", "mysql -u root -p'" + chr(1089) + "екретный' shop"),
+    ("mysql: слово через дефис", "правило mysql-parol-v-komande, а у cc ключ -pedantic/-preserve"),
     ("mysql: пояснение вместо пароля", "mysql -u root -p'" + chr(1055) + "ароль от базы — в 1Password' shop"),
 ]
 
