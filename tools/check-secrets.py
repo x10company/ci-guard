@@ -298,14 +298,17 @@ PODPIS_RU = re.compile(
 # Где шумит: путь с mysql в той же строке перед ключом на -p
 # (`/usr/include/mysql -pedantic`, `/var/lib/mysql -preserve`).
 #
-# Слово, продолженное дефисом (mysql-client, mysql-server, имя правила
+# Слово mysql, продолженное дефисом (mysql-client, mysql-server, имя правила
 # mysql-parol-v-komande), командой не считается: 09.10.2026 v1.0.5 не пустила
 # в журнал проверки строку «правило mysql-parol-v-komande … -pedantic/-preserve».
-# mariadb-dump и другие утилиты с дефисом перечислены отдельно и ловятся.
+# Утилит mysql с дефисом нет (mysql_upgrade — через подчёркивание). А у MariaDB
+# все утилиты — mariadb-что-то (dump, binlog, show, slap, upgrade, hotcopy…),
+# поэтому mariadb с любым продолжением из букв через дефис — команда. Первая
+# редакция v1.0.6 перечисляла пять из них, и остальные молчали (тестировщик).
 MYSQL_KOMANDA = re.compile(
-    r"(?<![\w-])(?:mysql|mysqldump|mysqladmin|mysqlcheck|mysqlimport|mysqlshow"
-    r"|mysqlbinlog|mysqlpump|mysqlslap|mysql_upgrade|mysqlsh|mariabackup|xtrabackup"
-    r"|mariadb|mariadb-dump|mariadb-admin|mariadb-check|mariadb-import|mariadb-backup)(?![\w-])")
+    r"(?<![\w-])(?:(?:mysql|mysqldump|mysqladmin|mysqlcheck|mysqlimport|mysqlshow"
+    r"|mysqlbinlog|mysqlpump|mysqlslap|mysql_upgrade|mysqlsh|mariabackup|xtrabackup)"
+    r"|mariadb(?:-[a-z]+)*)(?![\w-])")
 # Перед ключом — пробел или начало элемента списка аргументов: ["mysqldump", "-pX"].
 MYSQL_KLYUCH = re.compile(
     r"""(?:(?<=\s)|(?<=["'\[,(]))(?:-p|--password=)"""
@@ -865,6 +868,11 @@ PROBY = [
      "mysql" + "dump -h $DB_HOST -u root -p" + "Lk4wQ2eR7tY9" + " shop"),
     ("пароль в mysql --password=", "_proba.sh",
      "mariadb" + "-admin -u root --password=" + "Lk4wQ2eR7tY9" + " status"),
+    # Утилиты MariaDB с дефисом — любые, не только перечисленные (09.10.2026).
+    ("пароль в mariadb-binlog", "_proba.sh",
+     "mariadb" + "-binlog -u root -p" + "Lk4wQ2eR7tY9" + " x"),
+    ("пароль в mariadb-secure-installation", "_proba.sh",
+     "mariadb" + "-secure-installation --password=" + "Lk4wQ2eR7tY9"),
     ('пароль в mysql -p"…"', "_proba.md",
      "mysql" + ' -u app -p"' + "Lk4wQ2eR7tY9" + '" shop'),
     # Спецзнаки внутри пароля — не подстановка: первая редакция правила
@@ -958,6 +966,7 @@ PROBY_MYSQL_TIHIE = [
     ("mysql: !X! в cmd", "set CMD=mysql -u app -p!DB_PW2! shop"),
     ("mysql: заглушка «секретный»", "mysql -u root -p'" + chr(1089) + "екретный' shop"),
     ("mysql: слово через дефис", "правило mysql-parol-v-komande, а у cc ключ -pedantic/-preserve"),
+    ("mysql: пакет mysql-client", "apt-get install mysql-client -preserve-env"),
     ("mysql: пояснение вместо пароля", "mysql -u root -p'" + chr(1055) + "ароль от базы — в 1Password' shop"),
 ]
 
